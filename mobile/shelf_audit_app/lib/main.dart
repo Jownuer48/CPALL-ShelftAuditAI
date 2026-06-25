@@ -3,13 +3,19 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'camera_capture_screen.dart';
+import 'package:flutter/services.dart';
 
 const String apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: 'http://10.0.2.2:8000',
 );
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+
   runApp(const ShelfAuditApp());
 }
 
@@ -54,10 +60,9 @@ class _UploadScreenState extends State<UploadScreen> {
   String? _message;
 
   Future<void> _takePhoto() async {
-    final XFile? image = await _picker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: 85,
-      maxWidth: 1280,
+    final XFile? image = await Navigator.push<XFile?>(
+      context,
+      MaterialPageRoute(builder: (_) => const CameraCaptureScreen()),
     );
 
     if (image == null) return;
