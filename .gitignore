@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+
+# Upload files
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Python cache
+.pytest_cache/
+
+# Flutter
+mobile/shelf_audit_app/.dart_tool/
+mobile/shelf_audit_app/.idea/
+mobile/shelf_audit_app/build/
+mobile/shelf_audit_app/.flutter-plugins
+mobile/shelf_audit_app/.flutter-plugins-dependencies
+mobile/shelf_audit_app/.packages
+
+# Android
+*.apk
+*.aab
+*.jks
+key.properties
+
+# OS
+.DS_Store
+Thumbs.db
