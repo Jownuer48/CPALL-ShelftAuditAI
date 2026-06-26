@@ -19,12 +19,14 @@ from queue_client import SHELF_QUEUE_NAME, publish_job
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+ANNOTATED_DIR = os.path.join(BASE_DIR, "annotated")
 REFERENCE_DIR = os.path.join(BASE_DIR, "reference")
 PLANOGRAM_DIR = os.path.join(BASE_DIR, "planograms")
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(ANNOTATED_DIR, exist_ok=True)
 os.makedirs(REFERENCE_DIR, exist_ok=True)
 os.makedirs(PLANOGRAM_DIR, exist_ok=True)
 
@@ -39,11 +41,18 @@ app.add_middleware(
 )
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+app.mount("/files/uploads", StaticFiles(directory=UPLOAD_DIR), name="files_uploads")
+app.mount(
+    "/files/annotated",
+    StaticFiles(directory=ANNOTATED_DIR),
+    name="files_annotated",
+)
 
 
 @app.on_event("startup")
 def startup_event() -> None:
     os.makedirs(UPLOAD_DIR, exist_ok=True)
+    os.makedirs(ANNOTATED_DIR, exist_ok=True)
     os.makedirs(REFERENCE_DIR, exist_ok=True)
     os.makedirs(PLANOGRAM_DIR, exist_ok=True)
     init_db()
@@ -108,7 +117,9 @@ async def upload_image(
         "missing_count": 0,
         "missing_items": [],
         "image_name": image_name,
-        "image_url": f"/uploads/{image_name}",
+        "image_url": f"/files/uploads/{image_name}",
+        "annotated_image_name": None,
+        "annotated_image_url": None,
         "message": "Upload received. Analysis is queued.",
     }
 

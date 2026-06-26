@@ -1,11 +1,14 @@
 ﻿import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
-import 'camera_capture_screen.dart';
+import 'camera_capture_screen_stub.dart'
+    if (dart.library.io) 'camera_capture_screen.dart';
+import 'captured_shelf_image.dart';
 
 const String apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
@@ -47,6 +50,7 @@ class UploadScreen extends StatefulWidget {
 
 class _UploadScreenState extends State<UploadScreen> {
   final TextEditingController _branchController = TextEditingController();
+  final ImagePicker _picker = ImagePicker();
   final Dio _dio = Dio();
 
   CapturedShelfImage? _selectedImage;
@@ -75,16 +79,37 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   Future<void> _takePhoto() async {
-    final image = await Navigator.push<CapturedShelfImage?>(
-      context,
-      MaterialPageRoute(builder: (_) => const CameraCaptureScreen()),
-    );
+    final CapturedShelfImage? image;
 
-    if (image == null) return;
+    if (kIsWeb) {
+      final pickedImage = await _picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 85,
+        maxWidth: 1280,
+      );
+
+      if (pickedImage == null) return;
+
+      image = CapturedShelfImage(
+        name: pickedImage.name.isNotEmpty
+            ? pickedImage.name
+            : 'shelf_${DateTime.now().millisecondsSinceEpoch}.jpg',
+        bytes: await pickedImage.readAsBytes(),
+        path: pickedImage.path,
+      );
+    } else {
+      image = await Navigator.push<CapturedShelfImage?>(
+        context,
+        MaterialPageRoute(builder: (_) => const CameraCaptureScreen()),
+      );
+    }
+
+    final capturedImage = image;
+    if (capturedImage == null) return;
 
     setState(() {
-      _selectedImage = image;
-      _selectedImageBytes = image.bytes;
+      _selectedImage = capturedImage;
+      _selectedImageBytes = capturedImage.bytes;
       _clearResult();
     });
   }
@@ -488,7 +513,7 @@ class _UploadScreenState extends State<UploadScreen> {
 
     return Card(
       elevation: 0,
-      color: color.withOpacity(0.10),
+      color: color.withValues(alpha: 0.10),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(18),
         side: BorderSide(color: color, width: 1.4),
@@ -548,7 +573,7 @@ class _UploadScreenState extends State<UploadScreen> {
                       margin: const EdgeInsets.only(bottom: 8),
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.75),
+                        color: Colors.white.withValues(alpha: 0.75),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: Colors.black12),
                       ),

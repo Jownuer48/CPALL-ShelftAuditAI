@@ -32,6 +32,9 @@ backend/shelf_audit.db
 backend/uploads/*
 !backend/uploads/.gitkeep
 
+backend/annotated/*
+!backend/annotated/.gitkeep
+
 
 # =========================
 # CPALL / Local Shelf Images

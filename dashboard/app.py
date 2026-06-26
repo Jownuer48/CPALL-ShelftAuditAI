@@ -10,6 +10,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND_DIR = os.path.join(BASE_DIR, "backend")
 DB_PATH = os.path.join(BACKEND_DIR, "shelf_audit.db")
 UPLOAD_DIR = os.path.join(BACKEND_DIR, "uploads")
+ANNOTATED_DIR = os.path.join(BACKEND_DIR, "annotated")
 
 REQUIRED_COLUMNS = {
     "id": None,
@@ -22,9 +23,22 @@ REQUIRED_COLUMNS = {
     "missing_items_json": "[]",
     "status": "DONE",
     "error_message": None,
+    "annotated_image_name": None,
     "created_at": None,
     "updated_at": None,
 }
+
+
+def safe_str(value):
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    return str(value).strip()
+
 
 st.set_page_config(page_title="Shelf Audit AI Dashboard", layout="wide")
 st.title("Shelf Audit AI Dashboard")
@@ -52,11 +66,20 @@ def load_data() -> pd.DataFrame:
             if column not in df.columns:
                 df[column] = default
 
-        df["status"] = df["status"].fillna("")
+        text_columns = [
+            "image_name",
+            "detected_model",
+            "result",
+            "status",
+            "error_message",
+            "annotated_image_name",
+        ]
+        for column in text_columns:
+            df[column] = df[column].apply(safe_str)
+
         df.loc[df["status"] == "", "status"] = df["result"].apply(
             lambda value: "DONE" if value in ["PASS", "FAIL", "UNKNOWN_MODEL"] else "PENDING"
         )
-        df["result"] = df["result"].fillna("")
         df["missing_count"] = df["missing_count"].fillna(0).astype(int)
         return df
 
@@ -156,7 +179,7 @@ with middle:
 
 with right:
     model_values = sorted(
-        [value for value in df["detected_model"].dropna().unique().tolist() if value]
+        [safe_str(value) for value in df["detected_model"].unique().tolist() if safe_str(value)]
     )
     model_filter = st.selectbox("Filter Model", ["ALL"] + model_values)
 
@@ -181,6 +204,7 @@ table_columns = [
     "detected_model",
     "model_score",
     "missing_count",
+    "annotated_image_name",
     "created_at",
     "updated_at",
 ]
@@ -190,37 +214,53 @@ table_df["model_score"] = table_df["model_score"].apply(format_score)
 st.dataframe(table_df, use_container_width=True)
 
 st.divider()
-st.subheader("Inspection Images")
+st.subheader("AI Visual Audit Result")
 
 for _, row in filtered_df.iterrows():
-    image_name = row.get("image_name") or ""
-    image_path = os.path.join(UPLOAD_DIR, image_name)
+    image_name = safe_str(row.get("image_name", ""))
+    annotated_image_name = safe_str(row.get("annotated_image_name", ""))
+
+    if annotated_image_name:
+        annotated_image_path = os.path.join(ANNOTATED_DIR, annotated_image_name)
+    else:
+        annotated_image_path = ""
+
+    image_path = ""
+    image_caption = ""
+
+    if annotated_image_path and os.path.exists(annotated_image_path):
+        image_path = annotated_image_path
+        image_caption = annotated_image_name
+    elif image_name:
+        image_path = os.path.join(UPLOAD_DIR, image_name)
+        image_caption = image_name
+
     missing_items = row.get("missing_items") or []
-    status = row.get("status") or "-"
-    result = row.get("result") or "-"
-    error_message = row.get("error_message")
+    status = safe_str(row.get("status", "")) or "-"
+    result = safe_str(row.get("result", "")) or "-"
+    error_message = safe_str(row.get("error_message", ""))
 
     with st.container(border=True):
-        c1, c2 = st.columns([1, 2])
+        c1, c2 = st.columns([2, 1])
 
         with c1:
-            if image_name and os.path.exists(image_path):
+            if image_caption and os.path.exists(image_path):
                 try:
                     image = Image.open(image_path)
-                    st.image(image, caption=image_name, use_container_width=True)
+                    st.image(image, caption=image_caption, use_container_width=True)
                 except Exception:
                     st.error("เปิดรูปไม่ได้")
             else:
-                st.error("ไม่พบรูปภาพใน uploads")
+                st.warning("No image available")
 
         with c2:
             show_status(status, result, error_message)
-            st.write(f"**Branch Code:** {row.get('branch_code') or '-'}")
-            st.write(f"**Detected Model:** {row.get('detected_model') or '-'}")
+            st.write(f"**Branch Code:** {safe_str(row.get('branch_code', '')) or '-'}")
+            st.write(f"**Detected Model:** {safe_str(row.get('detected_model', '')) or '-'}")
             st.write(f"**Model Score:** {format_score(row.get('model_score'))}")
             st.write(f"**Missing Count:** {int(row.get('missing_count') or 0)}")
-            st.write(f"**Created At:** {row.get('created_at') or '-'}")
-            st.write(f"**Updated At:** {row.get('updated_at') or '-'}")
+            st.write(f"**Created At:** {safe_str(row.get('created_at', '')) or '-'}")
+            st.write(f"**Updated At:** {safe_str(row.get('updated_at', '')) or '-'}")
 
             if len(missing_items) == 0:
                 st.write("**Missing Items:** ไม่มีรายการ")

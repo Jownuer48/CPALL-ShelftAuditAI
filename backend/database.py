@@ -55,6 +55,7 @@ def init_db() -> None:
                 missing_items_json TEXT DEFAULT '[]',
                 status TEXT DEFAULT 'PENDING',
                 error_message TEXT,
+                annotated_image_name TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
@@ -76,6 +77,7 @@ def init_db() -> None:
         )
         _add_column_if_missing(conn, columns, "status", "TEXT DEFAULT 'PENDING'")
         _add_column_if_missing(conn, columns, "error_message", "TEXT")
+        _add_column_if_missing(conn, columns, "annotated_image_name", "TEXT")
         _add_column_if_missing(conn, columns, "created_at", "TEXT")
         _add_column_if_missing(conn, columns, "updated_at", "TEXT")
 
@@ -158,6 +160,7 @@ def update_inspection_result(
     result: str,
     missing_count: int,
     missing_items: List[Dict[str, Any]],
+    annotated_image_name: Optional[str] = None,
 ) -> None:
     with get_connection() as conn:
         conn.execute(
@@ -171,6 +174,7 @@ def update_inspection_result(
                 missing_items_json = ?,
                 status = 'DONE',
                 error_message = NULL,
+                annotated_image_name = ?,
                 updated_at = ?
             WHERE id = ?
             """,
@@ -180,6 +184,7 @@ def update_inspection_result(
                 result,
                 missing_count,
                 json.dumps(missing_items, ensure_ascii=False),
+                annotated_image_name,
                 utc_now_text(),
                 inspection_id,
             ),
@@ -203,7 +208,12 @@ def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
         if item.get("model_score") == 0:
             item["model_score"] = None
 
-    item["image_url"] = f"/uploads/{item.get('image_name')}"
+    item["image_url"] = f"/files/uploads/{item.get('image_name')}"
+
+    annotated_image_name = item.get("annotated_image_name")
+    item["annotated_image_url"] = (
+        f"/files/annotated/{annotated_image_name}" if annotated_image_name else None
+    )
     return item
 
 

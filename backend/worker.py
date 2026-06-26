@@ -34,6 +34,7 @@ def process_job(message: dict) -> None:
         result=result.get("result", "FAILED"),
         missing_count=int(result.get("missing_count", 0)),
         missing_items=result.get("missing_items", []),
+        annotated_image_name=result.get("annotated_image_name"),
     )
     print(f"[WORKER] DONE inspection_id={inspection_id}")
 

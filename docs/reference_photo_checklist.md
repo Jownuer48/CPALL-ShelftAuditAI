@@ -2,7 +2,7 @@
 
 ## เป้าหมาย
 
-ใช้สำหรับถ่ายภาพต้นแบบของเชลฟ์ 4 โมเดล เพื่อให้ Backend ใช้เทียบกับภาพที่พนักงานถ่ายจากแอป
+ใช้สำหรับถ่ายภาพต้นแบบของเชลฟ์ 3 โมเดล เพื่อให้ Backend ใช้เทียบกับภาพที่พนักงานถ่ายจากแอป
 
 ## ชื่อไฟล์ที่ต้องใช้
 
@@ -10,12 +10,11 @@
 
 backend/reference/
 
-ชื่อไฟล์ต้องเป็น:
+ชื่อไฟล์ต้องเป็นอย่างใดอย่างหนึ่งต่อโมเดล:
 
-- model_a.jpg
-- model_b.jpg
-- model_c.jpg
-- model_d.jpg
+- model_a.jpg หรือ model_a.png
+- model_b.jpg หรือ model_b.png
+- model_c.jpg หรือ model_c.png
 
 ## วิธีถ่ายรูปต้นแบบ
 
@@ -42,7 +41,6 @@ backend/reference/
 backend/reference/model_a.jpg
 backend/reference/model_b.jpg
 backend/reference/model_c.jpg
-backend/reference/model_d.jpg
 
 backend/test_images/model_a_test_01.jpg
 backend/test_images/model_a_test_02.jpg

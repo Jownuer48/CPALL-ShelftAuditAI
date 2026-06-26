@@ -75,16 +75,16 @@ mobile\shelf_audit_app\build\app\outputs\flutter-apk\app-release.apk
 5. Upload to AI
 6. Check /results
 7. Check Dashboard
+8. Check YOLO-style annotated image in backend\annotated\
 
 ## 7. Reference Images
 
 Put reference images here:
 
 ```text
-backend\reference\model_a.jpg
-backend\reference\model_b.jpg
-backend\reference\model_c.jpg
-backend\reference\model_d.jpg
+backend\reference\model_a.jpg หรือ backend\reference\model_a.png
+backend\reference\model_b.jpg หรือ backend\reference\model_b.png
+backend\reference\model_c.jpg หรือ backend\reference\model_c.png
 ```
 
 Do not push real CPALL images to GitHub unless allowed.
@@ -97,7 +97,19 @@ Planogram templates are here:
 backend\planograms\model_a.json
 backend\planograms\model_b.json
 backend\planograms\model_c.json
-backend\planograms\model_d.json
 ```
 
-ช่วงแรก slots สามารถว่างได้ เพราะจะเริ่มจากแยก MODEL_A / MODEL_B / MODEL_C / MODEL_D ก่อน
+ช่วงแรก slots สามารถว่างได้ เพราะจะเริ่มจากแยก MODEL_A / MODEL_B / MODEL_C ก่อน
+ถ้ามี backend\planograms\model_d.json อยู่เดิม สามารถเก็บไว้ได้ แต่ระบบไม่ require MODEL_D แล้ว
+
+## 9. AI Visual Audit Result
+
+หลัง worker วิเคราะห์รูปเสร็จ ระบบจะสร้างภาพผลตรวจแบบ YOLO-style ไว้ที่:
+
+```text
+backend\annotated\
+```
+
+Dashboard จะแสดงภาพ annotated ก่อน ถ้ายังไม่มีจะ fallback ไปแสดงรูป upload เดิม
+
+หมายเหตุ: กล่องสีเขียว/แดง/เหลืองมาจาก planogram JSON + OpenCV drawing ไม่ใช่ YOLO ที่ train แล้ว

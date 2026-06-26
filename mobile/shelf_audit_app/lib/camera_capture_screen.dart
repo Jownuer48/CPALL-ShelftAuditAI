@@ -1,17 +1,14 @@
-import 'dart:typed_data';
+import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image/image.dart' as img;
+import 'package:path_provider/path_provider.dart';
 
 import 'camera_frame_config.dart';
-
-class CapturedShelfImage {
-  const CapturedShelfImage({required this.name, required this.bytes});
-
-  final String name;
-  final Uint8List bytes;
-}
+import 'captured_shelf_image.dart';
 
 class CameraCaptureScreen extends StatefulWidget {
   const CameraCaptureScreen({super.key});
@@ -28,6 +25,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
   bool _flashOn = false;
   bool _flashAvailable = true;
   String? _cameraError;
+  Size? _previewViewSize;
 
   @override
   void initState() {
@@ -133,18 +131,11 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
 
       final image = await controller.takePicture();
       final bytes = await image.readAsBytes();
+      final croppedImage = await _cropToShelfFrame(bytes);
 
       if (!mounted) return;
 
-      Navigator.pop(
-        context,
-        CapturedShelfImage(
-          name: image.name.isNotEmpty
-              ? image.name
-              : 'shelf_${DateTime.now().millisecondsSinceEpoch}.jpg',
-          bytes: bytes,
-        ),
-      );
+      Navigator.pop(context, croppedImage);
     } catch (e) {
       if (!mounted) return;
 
@@ -160,6 +151,135 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
 
   void _showSnackBar(String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<CapturedShelfImage> _cropToShelfFrame(Uint8List bytes) async {
+    final decoded = img.decodeImage(bytes);
+
+    if (decoded == null) {
+      throw StateError('อ่านไฟล์รูปไม่ได้');
+    }
+
+    final oriented = img.bakeOrientation(decoded);
+    final imageWidth = oriented.width;
+    final imageHeight = oriented.height;
+
+    final cropRect = _cropRectForImage(
+      imageWidth: imageWidth,
+      imageHeight: imageHeight,
+    );
+    final cropX = cropRect.left;
+    final cropY = cropRect.top;
+    final cropWidth = cropRect.width;
+    final cropHeight = cropRect.height;
+
+    debugPrint('Shelf crop original image size: ${imageWidth}x$imageHeight');
+    debugPrint(
+      'Shelf crop preview view size: '
+      '${_previewViewSize?.width}x${_previewViewSize?.height}',
+    );
+    debugPrint('Shelf crop rect: x=$cropX y=$cropY w=$cropWidth h=$cropHeight');
+
+    final cropped = img.copyCrop(
+      oriented,
+      x: cropX,
+      y: cropY,
+      width: cropWidth,
+      height: cropHeight,
+    );
+    final croppedBytes = Uint8List.fromList(img.encodeJpg(cropped, quality: 92));
+    final tempDir = await getTemporaryDirectory();
+    final croppedName = 'shelf_crop_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    final croppedPath = '${tempDir.path}${Platform.pathSeparator}$croppedName';
+    final croppedFile = File(croppedPath);
+
+    await croppedFile.writeAsBytes(croppedBytes, flush: true);
+
+    debugPrint('Shelf cropped image path: $croppedPath');
+
+    return CapturedShelfImage(
+      name: croppedName,
+      bytes: croppedBytes,
+      path: croppedPath,
+    );
+  }
+
+  ({int left, int top, int width, int height}) _cropRectForImage({
+    required int imageWidth,
+    required int imageHeight,
+  }) {
+    final previewSize = _previewViewSize;
+
+    if (previewSize == null ||
+        previewSize.width <= 0 ||
+        previewSize.height <= 0) {
+      final cropWidth = _clampInt(
+        (imageWidth * CameraFrameConfig.frameWidthRatio).round(),
+        1,
+        imageWidth,
+      );
+      final cropHeight = _clampInt(
+        (imageHeight * CameraFrameConfig.frameHeightRatio).round(),
+        1,
+        imageHeight,
+      );
+      final cropX = _clampInt(
+        ((imageWidth - cropWidth) / 2).round(),
+        0,
+        imageWidth - cropWidth,
+      );
+      final cropY = _clampInt(
+        (imageHeight * CameraFrameConfig.frameTopRatio).round(),
+        0,
+        imageHeight - cropHeight,
+      );
+
+      return (left: cropX, top: cropY, width: cropWidth, height: cropHeight);
+    }
+
+    final frameWidth = previewSize.width * CameraFrameConfig.frameWidthRatio;
+    final frameHeight = previewSize.height * CameraFrameConfig.frameHeightRatio;
+    final frameLeft = (previewSize.width - frameWidth) / 2;
+    final frameTop = previewSize.height * CameraFrameConfig.frameTopRatio;
+
+    final previewScale = math.max(
+      previewSize.width / imageWidth,
+      previewSize.height / imageHeight,
+    );
+    final renderedImageWidth = imageWidth * previewScale;
+    final renderedImageHeight = imageHeight * previewScale;
+    final renderedImageLeft = (previewSize.width - renderedImageWidth) / 2;
+    final renderedImageTop = (previewSize.height - renderedImageHeight) / 2;
+
+    final sourceLeft = (frameLeft - renderedImageLeft) / previewScale;
+    final sourceTop = (frameTop - renderedImageTop) / previewScale;
+    final sourceRight =
+        (frameLeft + frameWidth - renderedImageLeft) / previewScale;
+    final sourceBottom =
+        (frameTop + frameHeight - renderedImageTop) / previewScale;
+
+    final cropX = _clampInt(sourceLeft.floor(), 0, imageWidth - 1);
+    final cropY = _clampInt(sourceTop.floor(), 0, imageHeight - 1);
+    final cropRight = _clampInt(sourceRight.ceil(), cropX + 1, imageWidth);
+    final cropBottom = _clampInt(sourceBottom.ceil(), cropY + 1, imageHeight);
+
+    debugPrint(
+      'Shelf crop preview mapping: '
+      'scale=$previewScale '
+      'rendered=${renderedImageWidth}x$renderedImageHeight '
+      'offset=$renderedImageLeft,$renderedImageTop',
+    );
+
+    return (
+      left: cropX,
+      top: cropY,
+      width: cropRight - cropX,
+      height: cropBottom - cropY,
+    );
+  }
+
+  int _clampInt(int value, int min, int max) {
+    return value.clamp(min, max).toInt();
   }
 
   @override
@@ -212,12 +332,21 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
                                 );
                               }
 
-                              return Stack(
-                                fit: StackFit.expand,
-                                children: [
-                                  _buildCameraPreview(controller),
-                                  const ShelfFrameOverlay(),
-                                ],
+                              return LayoutBuilder(
+                                builder: (context, constraints) {
+                                  _previewViewSize = Size(
+                                    constraints.maxWidth,
+                                    constraints.maxHeight,
+                                  );
+
+                                  return Stack(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      _buildCameraPreview(controller),
+                                      const ShelfFrameOverlay(),
+                                    ],
+                                  );
+                                },
                               );
                             },
                           ),
@@ -444,7 +573,7 @@ class ShelfFramePainter extends CustomPainter {
     );
 
     final darkPaint = Paint()
-      ..color = Colors.black.withOpacity(CameraFrameConfig.overlayOpacity)
+      ..color = Colors.black.withValues(alpha: CameraFrameConfig.overlayOpacity)
       ..style = PaintingStyle.fill;
 
     canvas.drawPath(darkPath, darkPaint);
@@ -492,7 +621,7 @@ class ShelfFramePainter extends CustomPainter {
     if (!CameraFrameConfig.showGrid) return;
 
     final gridPaint = Paint()
-      ..color = Colors.white.withOpacity(0.30)
+      ..color = Colors.white.withValues(alpha: 0.30)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
 
@@ -528,7 +657,7 @@ class ShelfFramePainter extends CustomPainter {
     if (!CameraFrameConfig.showCenterLine) return;
 
     final centerPaint = Paint()
-      ..color = CameraFrameConfig.frameColor.withOpacity(0.45)
+      ..color = CameraFrameConfig.frameColor.withValues(alpha: 0.45)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
 
