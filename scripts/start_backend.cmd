@@ -1,5 +1,5 @@
 @echo off
-cd /d C:\Users\ASUS\ShelfAuditAI\backend
+cd /d "%~dp0..\backend"
 
 call .venv\Scripts\activate.bat
 

@@ -1,7 +1,7 @@
 @echo off
-cd /d C:\Users\ASUS\ShelfAuditAI\dashboard
+cd /d "%~dp0..\dashboard"
 
-call ..\backend\.venv\Scripts\activate.bat
+call "%~dp0..\backend\.venv\Scripts\activate.bat"
 
 streamlit run app.py
 
