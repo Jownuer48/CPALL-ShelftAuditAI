@@ -1,6 +1,7 @@
-fastapi
+﻿fastapi
 uvicorn
 python-multipart
+pika
 opencv-python
 scikit-image
 numpy

@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: shelf-rabbitmq
+    ports:
+      # ใช้พอร์ตมาตรฐานได้เลย เพราะโปรเจกต์เก่าใช้ 5673 ไปแล้ว จะไม่ชนกันแน่นอน
+      - "5672:5672"   
+      - "15672:15672"
+    volumes:
+      - shelf_rabbitmq_data:/var/lib/rabbitmq
+
+volumes:
+  shelf_rabbitmq_data:

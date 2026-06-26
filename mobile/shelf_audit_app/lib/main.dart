@@ -1,3 +1,4 @@
+﻿import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -50,18 +51,25 @@ class _UploadScreenState extends State<UploadScreen> {
 
   CapturedShelfImage? _selectedImage;
   Uint8List? _selectedImageBytes;
+  Timer? _pollTimer;
 
   bool _isUploading = false;
+  bool _isPolling = false;
+  bool _isPollingRequest = false;
 
+  int? _inspectionId;
+  String? _status;
   String? _result;
   String? _detectedModel;
   double? _modelScore;
   int? _missingCount;
   List<dynamic> _missingItems = [];
   String? _message;
+  String? _errorMessage;
 
   @override
   void dispose() {
+    _pollTimer?.cancel();
     _branchController.dispose();
     super.dispose();
   }
@@ -82,12 +90,19 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   void _clearResult() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _isPolling = false;
+    _isPollingRequest = false;
+    _inspectionId = null;
+    _status = null;
     _result = null;
     _detectedModel = null;
     _modelScore = null;
     _missingCount = null;
     _missingItems = [];
     _message = null;
+    _errorMessage = null;
   }
 
   Future<void> _uploadImage() async {
@@ -106,6 +121,7 @@ class _UploadScreenState extends State<UploadScreen> {
     setState(() {
       _isUploading = true;
       _message = null;
+      _errorMessage = null;
     });
 
     try {
@@ -134,33 +150,28 @@ class _UploadScreenState extends State<UploadScreen> {
         ),
       );
 
-      final data = response.data;
+      final data = _asMap(response.data);
+      final inspectionId = _parseInt(data['inspection_id'] ?? data['id']);
 
       setState(() {
-        _result = data['result']?.toString();
-        _detectedModel = data['detected_model']?.toString();
-        _modelScore = _parseDouble(data['model_score']);
-        _missingCount = _parseInt(data['missing_count']);
-        _missingItems = data['missing_items'] is List
-            ? data['missing_items']
-            : [];
-        _message = data['message']?.toString() ?? 'Upload success';
+        _applyInspectionData(data);
+        _message = data['message']?.toString() ?? 'Upload received. Analysis is queued.';
       });
-    } on DioException catch (e) {
-      String errorText = 'Upload failed';
 
-      if (e.response != null) {
-        errorText = 'Server Error: ${e.response?.statusCode}';
-      } else if (e.message != null) {
-        errorText = e.message!;
+      if (inspectionId != null && !_isTerminalStatus(_status)) {
+        _startPolling(inspectionId);
       }
-
+    } on DioException catch (e) {
       setState(() {
-        _message = errorText;
+        _message = _dioErrorText(e);
+        _status = 'FAILED';
+        _errorMessage = _message;
       });
     } catch (e) {
       setState(() {
         _message = 'Error: $e';
+        _status = 'FAILED';
+        _errorMessage = _message;
       });
     } finally {
       if (mounted) {
@@ -169,6 +180,125 @@ class _UploadScreenState extends State<UploadScreen> {
         });
       }
     }
+  }
+
+  void _startPolling(int inspectionId) {
+    _pollTimer?.cancel();
+
+    if (mounted) {
+      setState(() {
+        _isPolling = true;
+      });
+    } else {
+      _isPolling = true;
+    }
+
+    _fetchInspection(inspectionId);
+    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      _fetchInspection(inspectionId);
+    });
+  }
+
+  Future<void> _fetchInspection(int inspectionId) async {
+    if (_isPollingRequest) return;
+
+    _isPollingRequest = true;
+
+    try {
+      final response = await _dio.get(
+        '$apiBaseUrl/inspections/$inspectionId',
+        options: Options(headers: {'ngrok-skip-browser-warning': 'true'}),
+      );
+
+      if (!mounted) return;
+
+      final data = _asMap(response.data);
+
+      setState(() {
+        _applyInspectionData(data);
+      });
+
+      if (_isTerminalStatus(_status)) {
+        _stopPolling(notify: true);
+      }
+    } on DioException catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _message = _dioErrorText(e);
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _message = 'Polling error: $e';
+      });
+    } finally {
+      _isPollingRequest = false;
+    }
+  }
+
+  void _stopPolling({bool notify = false}) {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+
+    if (notify && mounted) {
+      setState(() {
+        _isPolling = false;
+      });
+    } else {
+      _isPolling = false;
+    }
+  }
+
+  void _applyInspectionData(Map<String, dynamic> data) {
+    _inspectionId = _parseInt(data['inspection_id'] ?? data['id']) ?? _inspectionId;
+    _status = _cleanString(data['status']) ?? _status;
+    _result = _cleanString(data['result']) ?? _result;
+    _detectedModel = _cleanString(data['detected_model']);
+    _modelScore = _parseDouble(data['model_score']);
+    _missingCount = _parseInt(data['missing_count']);
+    _missingItems = data['missing_items'] is List ? data['missing_items'] : [];
+    _errorMessage = _cleanString(data['error_message']);
+
+    if (_status == 'FAILED' && _errorMessage != null) {
+      _message = _errorMessage;
+    }
+  }
+
+  Map<String, dynamic> _asMap(dynamic value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) return Map<String, dynamic>.from(value);
+    return {};
+  }
+
+  String? _cleanString(dynamic value) {
+    if (value == null) return null;
+    final text = value.toString();
+    if (text.isEmpty || text == 'null') return null;
+    return text;
+  }
+
+  String _dioErrorText(DioException e) {
+    final responseData = e.response?.data;
+
+    if (responseData is Map && responseData['detail'] != null) {
+      final detail = responseData['detail'];
+      if (detail is Map && detail['message'] != null) {
+        return detail['message'].toString();
+      }
+      return detail.toString();
+    }
+
+    if (e.response != null) {
+      return 'Server Error: ${e.response?.statusCode}';
+    }
+
+    return e.message ?? 'Upload failed';
+  }
+
+  bool _isTerminalStatus(String? status) {
+    return status == 'DONE' || status == 'FAILED';
   }
 
   double? _parseDouble(dynamic value) {
@@ -188,9 +318,12 @@ class _UploadScreenState extends State<UploadScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
-  Color _resultColor() {
-    final result = _result?.toUpperCase();
+  Color _statusColor() {
+    if (_status == 'FAILED') return Colors.red;
+    if (_status == 'PROCESSING') return Colors.blue;
+    if (_status == 'PENDING') return Colors.orange;
 
+    final result = _result?.toUpperCase();
     if (result == 'PASS') return Colors.green;
     if (result == 'FAIL') return Colors.red;
     if (result == 'UNKNOWN_MODEL') return Colors.orange;
@@ -203,7 +336,13 @@ class _UploadScreenState extends State<UploadScreen> {
     return '${(_modelScore! * 100).toStringAsFixed(2)}%';
   }
 
+  String _displayResultText() {
+    if (_status == 'DONE') return _result ?? 'DONE';
+    return _status ?? _result ?? '-';
+  }
+
   bool get _hasImage => _selectedImage != null && _selectedImageBytes != null;
+  bool get _hasInspection => _status != null || _result != null || _inspectionId != null;
 
   @override
   Widget build(BuildContext context) {
@@ -221,7 +360,7 @@ class _UploadScreenState extends State<UploadScreen> {
               const SizedBox(height: 16),
               _buildUploadButton(),
               const SizedBox(height: 16),
-              if (_result != null) _buildResultCard(),
+              if (_hasInspection) _buildResultCard(),
               if (_message != null) _buildMessage(),
               const SizedBox(height: 20),
               _buildApiInfo(),
@@ -308,7 +447,7 @@ class _UploadScreenState extends State<UploadScreen> {
               ),
             const SizedBox(height: 14),
             OutlinedButton.icon(
-              onPressed: _isUploading ? null : _takePhoto,
+              onPressed: _isUploading || _isPolling ? null : _takePhoto,
               icon: const Icon(Icons.camera_alt),
               label: const Text('ถ่ายรูป'),
             ),
@@ -319,16 +458,24 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   Widget _buildUploadButton() {
+    final isBusy = _isUploading || _isPolling;
+
     return FilledButton.icon(
-      onPressed: _isUploading ? null : _uploadImage,
-      icon: _isUploading
+      onPressed: isBusy ? null : _uploadImage,
+      icon: isBusy
           ? const SizedBox(
               width: 18,
               height: 18,
               child: CircularProgressIndicator(strokeWidth: 2),
             )
           : const Icon(Icons.cloud_upload),
-      label: Text(_isUploading ? 'กำลังส่งข้อมูล...' : 'ส่งตรวจด้วย AI'),
+      label: Text(
+        _isUploading
+            ? 'กำลังส่งข้อมูล...'
+            : _isPolling
+            ? 'กำลังตรวจด้วย AI...'
+            : 'ส่งตรวจด้วย AI',
+      ),
       style: FilledButton.styleFrom(
         padding: const EdgeInsets.symmetric(vertical: 16),
         textStyle: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
@@ -337,7 +484,7 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   Widget _buildResultCard() {
-    final color = _resultColor();
+    final color = _statusColor();
 
     return Card(
       elevation: 0,
@@ -352,7 +499,7 @@ class _UploadScreenState extends State<UploadScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              _result ?? '-',
+              _displayResultText(),
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 34,
@@ -361,9 +508,22 @@ class _UploadScreenState extends State<UploadScreen> {
               ),
             ),
             const SizedBox(height: 12),
+            _infoRow('Inspection ID', '${_inspectionId ?? '-'}'),
+            _infoRow('Status', _status ?? '-'),
             _infoRow('Detected Model', _detectedModel ?? '-'),
             _infoRow('Model Score', _scoreText()),
             _infoRow('Missing Count', '${_missingCount ?? 0}'),
+            if (_errorMessage != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _errorMessage!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.red,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             if (_missingItems.isEmpty)
               const Text(
@@ -435,8 +595,8 @@ class _UploadScreenState extends State<UploadScreen> {
 
   Widget _buildMessage() {
     final message = _message ?? '';
-
     final isError =
+        _status == 'FAILED' ||
         message.toLowerCase().contains('error') ||
         message.toLowerCase().contains('failed') ||
         message.toLowerCase().contains('server');
