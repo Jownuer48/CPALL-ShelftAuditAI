@@ -1,23 +1,52 @@
+# =========================
 # Python
+# =========================
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Virtual environment
 .venv/
 venv/
-.env
+backend/.venv/
+backend/venv/
 
-# SQLite
+# Environment variables
+.env
+*.env
+
+
+# =========================
+# SQLite / Local Database
+# =========================
 *.db
 *.sqlite
 *.sqlite3
+backend/shelf_audit.db
 
-# Upload files
+
+# =========================
+# Uploaded Images
+# เก็บเฉพาะ .gitkeep เพื่อให้โฟลเดอร์ยังอยู่ใน Git
+# =========================
 backend/uploads/*
 !backend/uploads/.gitkeep
 
-# Python cache
-.pytest_cache/
 
+# =========================
+# CPALL / Local Shelf Images
+# รูปจริงของเชลฟ์ / รูปต้นแบบ / รูปทดสอบ ไม่ควร push ขึ้น GitHub
+# =========================
+backend/reference/*
+!backend/reference/.gitkeep
+
+backend/test_images/*
+!backend/test_images/.gitkeep
+
+
+# =========================
 # Flutter
+# =========================
 mobile/shelf_audit_app/.dart_tool/
 mobile/shelf_audit_app/.idea/
 mobile/shelf_audit_app/build/
@@ -25,12 +54,19 @@ mobile/shelf_audit_app/.flutter-plugins
 mobile/shelf_audit_app/.flutter-plugins-dependencies
 mobile/shelf_audit_app/.packages
 
-# Android
+
+# =========================
+# Android Build / Signing
+# =========================
 *.apk
 *.aab
 *.jks
 key.properties
 
-# OS
+
+# =========================
+# OS / Editor
+# =========================
 .DS_Store
 Thumbs.db
+.vscode/
