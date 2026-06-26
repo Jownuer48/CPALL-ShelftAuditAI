@@ -1,8 +1,17 @@
+import 'dart:typed_data';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'camera_frame_config.dart';
+
+class CapturedShelfImage {
+  const CapturedShelfImage({required this.name, required this.bytes});
+
+  final String name;
+  final Uint8List bytes;
+}
 
 class CameraCaptureScreen extends StatefulWidget {
   const CameraCaptureScreen({super.key});
@@ -123,10 +132,19 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
       await _initFuture;
 
       final image = await controller.takePicture();
+      final bytes = await image.readAsBytes();
 
       if (!mounted) return;
 
-      Navigator.pop(context, image);
+      Navigator.pop(
+        context,
+        CapturedShelfImage(
+          name: image.name.isNotEmpty
+              ? image.name
+              : 'shelf_${DateTime.now().millisecondsSinceEpoch}.jpg',
+          bytes: bytes,
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
 

@@ -1,10 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 
 import 'camera_capture_screen.dart';
 
@@ -48,10 +46,9 @@ class UploadScreen extends StatefulWidget {
 
 class _UploadScreenState extends State<UploadScreen> {
   final TextEditingController _branchController = TextEditingController();
-  final ImagePicker _picker = ImagePicker();
   final Dio _dio = Dio();
 
-  XFile? _selectedImage;
+  CapturedShelfImage? _selectedImage;
   Uint8List? _selectedImageBytes;
 
   bool _isUploading = false;
@@ -70,46 +67,16 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   Future<void> _takePhoto() async {
-    XFile? image;
-
-    if (kIsWeb) {
-      image = await _picker.pickImage(
-        source: ImageSource.camera,
-        imageQuality: 85,
-        maxWidth: 1280,
-      );
-    } else {
-      image = await Navigator.push<XFile?>(
-        context,
-        MaterialPageRoute(builder: (_) => const CameraCaptureScreen()),
-      );
-    }
-
-    if (image == null) return;
-
-    final bytes = await image.readAsBytes();
-
-    setState(() {
-      _selectedImage = image;
-      _selectedImageBytes = bytes;
-      _clearResult();
-    });
-  }
-
-  Future<void> _pickFromGallery() async {
-    final XFile? image = await _picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 85,
-      maxWidth: 1280,
+    final image = await Navigator.push<CapturedShelfImage?>(
+      context,
+      MaterialPageRoute(builder: (_) => const CameraCaptureScreen()),
     );
 
     if (image == null) return;
 
-    final bytes = await image.readAsBytes();
-
     setState(() {
       _selectedImage = image;
-      _selectedImageBytes = bytes;
+      _selectedImageBytes = image.bytes;
       _clearResult();
     });
   }
@@ -132,7 +99,7 @@ class _UploadScreenState extends State<UploadScreen> {
     }
 
     if (_selectedImage == null || _selectedImageBytes == null) {
-      _showSnackBar('กรุณาถ่ายรูปหรือเลือกรูปก่อน');
+      _showSnackBar('กรุณาถ่ายรูปก่อน');
       return;
     }
 
@@ -325,7 +292,7 @@ class _UploadScreenState extends State<UploadScreen> {
                     children: [
                       Icon(Icons.image, size: 58, color: Colors.grey),
                       SizedBox(height: 8),
-                      Text('ยังไม่ได้เลือกรูปภาพ'),
+                      Text('ยังไม่ได้ถ่ายรูปภาพ'),
                     ],
                   ),
                 ),
@@ -340,24 +307,10 @@ class _UploadScreenState extends State<UploadScreen> {
                 ),
               ),
             const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _isUploading ? null : _takePhoto,
-                    icon: const Icon(Icons.camera_alt),
-                    label: const Text('ถ่ายรูป'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _isUploading ? null : _pickFromGallery,
-                    icon: const Icon(Icons.photo_library),
-                    label: const Text('เลือกรูป'),
-                  ),
-                ),
-              ],
+            OutlinedButton.icon(
+              onPressed: _isUploading ? null : _takePhoto,
+              icon: const Icon(Icons.camera_alt),
+              label: const Text('ถ่ายรูป'),
             ),
           ],
         ),

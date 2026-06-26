@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 
 class CameraFrameConfig {
   // ขนาดและตำแหน่งกรอบ ใช้ค่า 0.0 - 1.0 อิงจากขนาดหน้าจอ
-  static const double frameWidthRatio = 0.90;
-  static const double frameHeightRatio = 0.56;
-  static const double frameTopRatio = 0.17;
+  static const double frameWidthRatio = 0.60;
+  static const double frameHeightRatio = 0.82;
+  static const double frameTopRatio = 0.10;
 
   // รูปทรงกรอบ
   static const double borderRadius = 22;

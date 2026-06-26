@@ -15,7 +15,7 @@ UPLOAD_DIR = os.path.join(BACKEND_DIR, "uploads")
 
 st.set_page_config(
     page_title="Shelf Audit AI Dashboard",
-    page_icon="🛒",
+    ##page_icon="🛒",
     layout="wide"
 )
 
