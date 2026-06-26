@@ -1,10 +1,12 @@
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-import 'camera_capture_screen.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+
+import 'camera_capture_screen.dart';
 
 const String apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
@@ -50,6 +52,8 @@ class _UploadScreenState extends State<UploadScreen> {
   final Dio _dio = Dio();
 
   XFile? _selectedImage;
+  Uint8List? _selectedImageBytes;
+
   bool _isUploading = false;
 
   String? _result;
@@ -59,16 +63,35 @@ class _UploadScreenState extends State<UploadScreen> {
   List<dynamic> _missingItems = [];
   String? _message;
 
+  @override
+  void dispose() {
+    _branchController.dispose();
+    super.dispose();
+  }
+
   Future<void> _takePhoto() async {
-    final XFile? image = await Navigator.push<XFile?>(
-      context,
-      MaterialPageRoute(builder: (_) => const CameraCaptureScreen()),
-    );
+    XFile? image;
+
+    if (kIsWeb) {
+      image = await _picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 85,
+        maxWidth: 1280,
+      );
+    } else {
+      image = await Navigator.push<XFile?>(
+        context,
+        MaterialPageRoute(builder: (_) => const CameraCaptureScreen()),
+      );
+    }
 
     if (image == null) return;
 
+    final bytes = await image.readAsBytes();
+
     setState(() {
       _selectedImage = image;
+      _selectedImageBytes = bytes;
       _clearResult();
     });
   }
@@ -82,8 +105,11 @@ class _UploadScreenState extends State<UploadScreen> {
 
     if (image == null) return;
 
+    final bytes = await image.readAsBytes();
+
     setState(() {
       _selectedImage = image;
+      _selectedImageBytes = bytes;
       _clearResult();
     });
   }
@@ -105,7 +131,7 @@ class _UploadScreenState extends State<UploadScreen> {
       return;
     }
 
-    if (_selectedImage == null) {
+    if (_selectedImage == null || _selectedImageBytes == null) {
       _showSnackBar('กรุณาถ่ายรูปหรือเลือกรูปก่อน');
       return;
     }
@@ -116,12 +142,18 @@ class _UploadScreenState extends State<UploadScreen> {
     });
 
     try {
+      final fileName = _selectedImage!.name.isNotEmpty
+          ? _selectedImage!.name
+          : 'shelf_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+      final multipartFile = MultipartFile.fromBytes(
+        _selectedImageBytes!,
+        filename: fileName,
+      );
+
       final formData = FormData.fromMap({
         'branch_code': branchCode,
-        'file': await MultipartFile.fromFile(
-          _selectedImage!.path,
-          filename: _selectedImage!.name,
-        ),
+        'file': multipartFile,
       });
 
       final response = await _dio.post(
@@ -164,9 +196,11 @@ class _UploadScreenState extends State<UploadScreen> {
         _message = 'Error: $e';
       });
     } finally {
-      setState(() {
-        _isUploading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isUploading = false;
+        });
+      }
     }
   }
 
@@ -201,6 +235,8 @@ class _UploadScreenState extends State<UploadScreen> {
     if (_modelScore == null) return '-';
     return '${(_modelScore! * 100).toStringAsFixed(2)}%';
   }
+
+  bool get _hasImage => _selectedImage != null && _selectedImageBytes != null;
 
   @override
   Widget build(BuildContext context) {
@@ -275,7 +311,7 @@ class _UploadScreenState extends State<UploadScreen> {
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 14),
-            if (_selectedImage == null)
+            if (!_hasImage)
               Container(
                 height: 230,
                 decoration: BoxDecoration(
@@ -297,8 +333,8 @@ class _UploadScreenState extends State<UploadScreen> {
             else
               ClipRRect(
                 borderRadius: BorderRadius.circular(16),
-                child: Image.file(
-                  File(_selectedImage!.path),
+                child: Image.memory(
+                  _selectedImageBytes!,
                   height: 280,
                   fit: BoxFit.cover,
                 ),
@@ -445,14 +481,17 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   Widget _buildMessage() {
+    final message = _message ?? '';
+
     final isError =
-        _message!.toLowerCase().contains('error') ||
-        _message!.toLowerCase().contains('failed');
+        message.toLowerCase().contains('error') ||
+        message.toLowerCase().contains('failed') ||
+        message.toLowerCase().contains('server');
 
     return Padding(
       padding: const EdgeInsets.only(top: 12),
       child: Text(
-        _message!,
+        message,
         textAlign: TextAlign.center,
         style: TextStyle(
           color: isError ? Colors.red : Colors.green,

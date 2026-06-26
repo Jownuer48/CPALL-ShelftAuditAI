@@ -1,5 +1,8 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import 'camera_frame_config.dart';
 
 class CameraCaptureScreen extends StatefulWidget {
   const CameraCaptureScreen({super.key});
@@ -14,51 +17,103 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
 
   bool _isTaking = false;
   bool _flashOn = false;
+  bool _flashAvailable = true;
+  String? _cameraError;
 
   @override
   void initState() {
     super.initState();
+
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+
     _setupCamera();
   }
 
   Future<void> _setupCamera() async {
-    final cameras = await availableCameras();
+    try {
+      final cameras = await availableCameras();
 
-    final backCamera = cameras.firstWhere(
-      (camera) => camera.lensDirection == CameraLensDirection.back,
-      orElse: () => cameras.first,
-    );
+      if (cameras.isEmpty) {
+        setState(() {
+          _cameraError = 'ไม่พบกล้องบนอุปกรณ์นี้';
+        });
+        return;
+      }
 
-    final controller = CameraController(
-      backCamera,
-      ResolutionPreset.high,
-      enableAudio: false,
-    );
+      final backCamera = cameras.firstWhere(
+        (camera) => camera.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.first,
+      );
 
-    _controller = controller;
-    _initFuture = controller.initialize();
+      final controller = CameraController(
+        backCamera,
+        ResolutionPreset.high,
+        enableAudio: false,
+      );
 
-    await _initFuture;
+      _controller = controller;
+      _initFuture = controller.initialize();
 
-    await controller.setFlashMode(FlashMode.off);
+      await _initFuture;
 
-    if (mounted) {
-      setState(() {});
+      try {
+        await controller.lockCaptureOrientation(DeviceOrientation.portraitUp);
+      } catch (_) {}
+
+      try {
+        await controller.setFlashMode(FlashMode.off);
+      } catch (_) {
+        _flashAvailable = false;
+      }
+
+      if (mounted) {
+        setState(() {});
+      }
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _cameraError = 'เปิดกล้องไม่สำเร็จ: $e';
+      });
     }
   }
 
   Future<void> _toggleFlash() async {
-    if (_controller == null) return;
+    final controller = _controller;
 
-    setState(() {
-      _flashOn = !_flashOn;
-    });
+    if (controller == null || !_flashAvailable) {
+      _showSnackBar('เครื่องนี้ไม่รองรับแฟลชในโหมดกล้องนี้');
+      return;
+    }
 
-    await _controller!.setFlashMode(_flashOn ? FlashMode.torch : FlashMode.off);
+    try {
+      final nextFlashState = !_flashOn;
+
+      await controller.setFlashMode(
+        nextFlashState ? FlashMode.torch : FlashMode.off,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        _flashOn = nextFlashState;
+      });
+    } catch (_) {
+      if (!mounted) return;
+
+      setState(() {
+        _flashAvailable = false;
+        _flashOn = false;
+      });
+
+      _showSnackBar('เครื่องนี้ไม่รองรับแฟลชในโหมดกล้องนี้');
+    }
   }
 
   Future<void> _takePicture() async {
-    if (_controller == null || _isTaking) return;
+    final controller = _controller;
+
+    if (controller == null || _isTaking) return;
 
     try {
       setState(() {
@@ -67,7 +122,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
 
       await _initFuture;
 
-      final image = await _controller!.takePicture();
+      final image = await controller.takePicture();
 
       if (!mounted) return;
 
@@ -75,9 +130,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
     } catch (e) {
       if (!mounted) return;
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('ถ่ายรูปไม่สำเร็จ: $e')));
+      _showSnackBar('ถ่ายรูปไม่สำเร็จ: $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -87,10 +140,20 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
     }
   }
 
+  void _showSnackBar(String text) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
   @override
   void dispose() {
-    _controller?.setFlashMode(FlashMode.off);
+    try {
+      _controller?.setFlashMode(FlashMode.off);
+    } catch (_) {}
+
     _controller?.dispose();
+
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+
     super.dispose();
   }
 
@@ -104,29 +167,30 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
         child: Column(
           children: [
             _buildHeader(),
-
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(22),
+                  borderRadius: BorderRadius.circular(
+                    CameraFrameConfig.borderRadius,
+                  ),
                   child: Container(
                     color: Colors.black,
-                    child: controller == null || _initFuture == null
-                        ? const Center(
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                            ),
-                          )
+                    child: _cameraError != null
+                        ? _buildCameraError()
+                        : controller == null || _initFuture == null
+                        ? _buildLoading()
                         : FutureBuilder<void>(
                             future: _initFuture,
                             builder: (context, snapshot) {
                               if (snapshot.connectionState !=
                                   ConnectionState.done) {
-                                return const Center(
-                                  child: CircularProgressIndicator(
-                                    color: Colors.white,
-                                  ),
+                                return _buildLoading();
+                              }
+
+                              if (snapshot.hasError) {
+                                return _buildCameraError(
+                                  message: snapshot.error.toString(),
                                 );
                               }
 
@@ -143,9 +207,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
                 ),
               ),
             ),
-
             _buildInstruction(),
-
             _buildBottomBar(),
           ],
         ),
@@ -164,7 +226,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
           ),
           const Expanded(
             child: Text(
-              'ถ่ายภาพเชลฟ์',
+              CameraFrameConfig.title,
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Colors.white,
@@ -177,11 +239,63 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
             onPressed: _toggleFlash,
             icon: Icon(
               _flashOn ? Icons.flash_on : Icons.flash_off,
-              color: Colors.white,
+              color: _flashAvailable ? Colors.white : Colors.white38,
               size: 28,
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildLoading() {
+    return const Center(child: CircularProgressIndicator(color: Colors.white));
+  }
+
+  Widget _buildCameraError({String? message}) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.no_photography, color: Colors.white70, size: 56),
+            const SizedBox(height: 14),
+            const Text(
+              'ไม่สามารถเปิดกล้องได้',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message ?? _cameraError ?? '-',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+            const SizedBox(height: 18),
+            FilledButton.icon(
+              onPressed: () {
+                setState(() {
+                  _cameraError = null;
+                  _controller = null;
+                  _initFuture = null;
+                });
+
+                _setupCamera();
+              },
+              icon: const Icon(Icons.refresh),
+              label: const Text('ลองใหม่'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -192,9 +306,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
         final previewSize = controller.value.previewSize;
 
         if (previewSize == null) {
-          return const Center(
-            child: CircularProgressIndicator(color: Colors.white),
-          );
+          return _buildLoading();
         }
 
         return FittedBox(
@@ -220,28 +332,15 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: Colors.white12),
         ),
-        child: const Column(
-          children: [
-            Text(
-              'จัดเชลฟ์ให้อยู่ในกรอบสีเขียว',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 15.5,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-            SizedBox(height: 5),
-            Text(
-              'ให้เห็นครบทั้งแผง ถ่ายตรงที่สุด และหลีกเลี่ยงการเอียง',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.white70,
-                fontSize: 13,
-                height: 1.35,
-              ),
-            ),
-          ],
+        child: const Text(
+          CameraFrameConfig.instruction,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 14.5,
+            fontWeight: FontWeight.w800,
+            height: 1.35,
+          ),
         ),
       ),
     );
@@ -255,24 +354,25 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
         children: [
           GestureDetector(
             onTap: _isTaking ? null : _takePicture,
-            child: Container(
-              width: 82,
-              height: 82,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              width: _isTaking ? 76 : 84,
+              height: _isTaking ? 76 : 84,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(color: Colors.white, width: 5),
               ),
               child: Center(
                 child: Container(
-                  width: 60,
-                  height: 60,
+                  width: _isTaking ? 48 : 60,
+                  height: _isTaking ? 48 : 60,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: _isTaking ? Colors.grey : Colors.white,
                   ),
                   child: _isTaking
                       ? const Padding(
-                          padding: EdgeInsets.all(16),
+                          padding: EdgeInsets.all(12),
                           child: CircularProgressIndicator(strokeWidth: 3),
                         )
                       : null,
@@ -301,15 +401,18 @@ class ShelfFrameOverlay extends StatelessWidget {
 class ShelfFramePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final frameWidth = size.width * 0.90;
-    final frameHeight = size.height * 0.58;
+    final frameWidth = size.width * CameraFrameConfig.frameWidthRatio;
+    final frameHeight = size.height * CameraFrameConfig.frameHeightRatio;
 
     final left = (size.width - frameWidth) / 2;
-    final top = (size.height - frameHeight) / 2;
+    final top = size.height * CameraFrameConfig.frameTopRatio;
 
     final frameRect = Rect.fromLTWH(left, top, frameWidth, frameHeight);
 
-    final rrect = RRect.fromRectAndRadius(frameRect, const Radius.circular(20));
+    final rrect = RRect.fromRectAndRadius(
+      frameRect,
+      const Radius.circular(CameraFrameConfig.borderRadius),
+    );
 
     final fullPath = Path()
       ..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
@@ -323,25 +426,31 @@ class ShelfFramePainter extends CustomPainter {
     );
 
     final darkPaint = Paint()
-      ..color = Colors.black.withOpacity(0.50)
+      ..color = Colors.black.withOpacity(CameraFrameConfig.overlayOpacity)
       ..style = PaintingStyle.fill;
 
     canvas.drawPath(darkPath, darkPaint);
 
     final borderPaint = Paint()
-      ..color = const Color(0xFF22FF8A)
+      ..color = CameraFrameConfig.frameColor
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.5;
+      ..strokeWidth = CameraFrameConfig.borderWidth;
 
     canvas.drawRRect(rrect, borderPaint);
 
+    _drawCorners(canvas, frameRect);
+    _drawGrid(canvas, frameRect);
+    _drawLabel(canvas, frameRect);
+  }
+
+  void _drawCorners(Canvas canvas, Rect frameRect) {
     final cornerPaint = Paint()
-      ..color = Colors.white
+      ..color = CameraFrameConfig.cornerColor
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 7
+      ..strokeWidth = CameraFrameConfig.cornerWidth
       ..strokeCap = StrokeCap.round;
 
-    const len = 42.0;
+    const len = CameraFrameConfig.cornerLength;
 
     final l = frameRect.left;
     final t = frameRect.top;
@@ -359,6 +468,10 @@ class ShelfFramePainter extends CustomPainter {
 
     canvas.drawLine(Offset(r, b), Offset(r - len, b), cornerPaint);
     canvas.drawLine(Offset(r, b), Offset(r, b - len), cornerPaint);
+  }
+
+  void _drawGrid(Canvas canvas, Rect frameRect) {
+    if (!CameraFrameConfig.showGrid) return;
 
     final gridPaint = Paint()
       ..color = Colors.white.withOpacity(0.30)
@@ -375,28 +488,52 @@ class ShelfFramePainter extends CustomPainter {
       Offset(x1, frameRect.bottom),
       gridPaint,
     );
+
     canvas.drawLine(
       Offset(x2, frameRect.top),
       Offset(x2, frameRect.bottom),
       gridPaint,
     );
+
     canvas.drawLine(
       Offset(frameRect.left, y1),
       Offset(frameRect.right, y1),
       gridPaint,
     );
+
     canvas.drawLine(
       Offset(frameRect.left, y2),
       Offset(frameRect.right, y2),
       gridPaint,
     );
 
+    if (!CameraFrameConfig.showCenterLine) return;
+
+    final centerPaint = Paint()
+      ..color = CameraFrameConfig.frameColor.withOpacity(0.45)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+
+    canvas.drawLine(
+      Offset(frameRect.center.dx, frameRect.top),
+      Offset(frameRect.center.dx, frameRect.bottom),
+      centerPaint,
+    );
+
+    canvas.drawLine(
+      Offset(frameRect.left, frameRect.center.dy),
+      Offset(frameRect.right, frameRect.center.dy),
+      centerPaint,
+    );
+  }
+
+  void _drawLabel(Canvas canvas, Rect frameRect) {
     final labelPaint = Paint()
-      ..color = const Color(0xFF22FF8A)
+      ..color = CameraFrameConfig.frameColor
       ..style = PaintingStyle.fill;
 
     final labelRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(frameRect.left + 14, frameRect.top + 14, 178, 32),
+      Rect.fromLTWH(frameRect.left + 14, frameRect.top + 14, 136, 32),
       const Radius.circular(999),
     );
 
@@ -406,7 +543,7 @@ class ShelfFramePainter extends CustomPainter {
       text: 'SHELF AREA',
       style: TextStyle(
         color: Colors.black,
-        fontSize: 14,
+        fontSize: 13,
         fontWeight: FontWeight.w900,
       ),
     );
