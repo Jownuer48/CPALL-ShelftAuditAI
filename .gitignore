@@ -73,3 +73,6 @@ key.properties
 .DS_Store
 Thumbs.db
 .vscode/
+
+*.db-shm
+*.db-wal
