@@ -1,0 +1,7 @@
+path: C:/Users/vip48/Desktop/ShelfAuditAI/datasets/shelf_audit
+train: images/train
+val: images/val
+
+names:
+  0: product
+  1: promo

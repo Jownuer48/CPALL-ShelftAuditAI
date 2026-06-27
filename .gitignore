@@ -74,5 +74,13 @@ key.properties
 Thumbs.db
 .vscode/
 
-*.db-shm
-*.db-wal
+runs/
+yolov8n.pt
+
+backend/uploads/
+backend/annotated/
+backend/*.db-shm
+backend/*.db-wal
+
+datasets/shelf_audit/images/
+datasets/shelf_audit/labels/

@@ -22,6 +22,13 @@ ORB_FEATURE_COUNT = 2000
 ORB_RATIO_TEST = 0.75
 RANSAC_REPROJECTION_THRESHOLD = 5.0
 ALIGNMENT_FAILURE_REASON = "Image is too tilted or shelf cannot be aligned with reference."
+USE_YOLO_ONLY_MODE = True
+YOLO_PRODUCT_PASS_MIN = 10
+YOLO_PROMO_PASS_MIN = 3
+YOLO_PRODUCT_WARNING_MIN = 5
+YOLO_CONFIDENCE_THRESHOLD = 0.25
+YOLO_SUPPORTED_MODELS = {"MODEL_A", "MODEL_B"}
+YOLO_IOU_THRESHOLD = 0.15
 
 ACTIVE_MODELS = ["MODEL_A", "MODEL_B", "MODEL_C"]
 
@@ -564,6 +571,158 @@ def classify_result(summary: Dict) -> str:
     return "FAIL"
 
 
+def box_iou(box_a: Tuple[int, int, int, int], box_b: Tuple[int, int, int, int]) -> float:
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    inter_w = max(0, inter_x2 - inter_x1)
+    inter_h = max(0, inter_y2 - inter_y1)
+    intersection = inter_w * inter_h
+
+    area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+    area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+    union = area_a + area_b - intersection
+
+    if union <= 0:
+        return 0.0
+
+    return float(intersection / union)
+
+
+def detection_box(detection: Dict) -> Tuple[int, int, int, int]:
+    return (
+        int(detection["x1"]),
+        int(detection["y1"]),
+        int(detection["x2"]),
+        int(detection["y2"]),
+    )
+
+
+def detection_center_inside_slot(
+    detection: Dict,
+    slot_box: Tuple[int, int, int, int],
+) -> bool:
+    x1, y1, x2, y2 = slot_box
+    det_x1, det_y1, det_x2, det_y2 = detection_box(detection)
+    center_x = (det_x1 + det_x2) / 2.0
+    center_y = (det_y1 + det_y2) / 2.0
+    return x1 <= center_x <= x2 and y1 <= center_y <= y2
+
+
+def best_matching_detection(
+    slot_box: Tuple[int, int, int, int],
+    slot_type: str,
+    detections: List[Dict],
+) -> Optional[Tuple[Dict, float]]:
+    best_detection = None
+    best_overlap = 0.0
+    best_confidence = -1.0
+
+    for detection in detections:
+        if detection.get("class_name") != slot_type:
+            continue
+
+        overlap = box_iou(slot_box, detection_box(detection))
+        center_inside = detection_center_inside_slot(detection, slot_box)
+        if overlap < YOLO_IOU_THRESHOLD and not center_inside:
+            continue
+
+        confidence = float(detection.get("confidence", 0.0))
+        if overlap > best_overlap or (
+            overlap == best_overlap and confidence > best_confidence
+        ):
+            best_detection = detection
+            best_overlap = overlap
+            best_confidence = confidence
+
+    if best_detection is None:
+        return None
+
+    return best_detection, best_overlap
+
+
+def inspect_slots_with_yolo(
+    aligned_img: np.ndarray,
+    model_id: str,
+    slots: List[Dict],
+) -> Optional[Tuple[List[Dict], List[Dict]]]:
+    if model_id not in YOLO_SUPPORTED_MODELS:
+        return None
+
+    try:
+        from yolo_detector import YOLO_MODEL_PATH, detect_objects
+
+        if os.path.exists(YOLO_MODEL_PATH):
+            print("[YOLO] Using YOLO detector")
+
+        detections = detect_objects(
+            aligned_img,
+            confidence_threshold=YOLO_CONFIDENCE_THRESHOLD,
+        )
+    except Exception as exc:
+        print(f"[YOLO] Fallback to similarity check: {exc}")
+        return None
+
+    missing_items = []
+    slot_results = []
+
+    for slot in slots:
+        slot_type = slot_kind(slot)
+
+        try:
+            x, y, w, h = slot_to_pixel(aligned_img, slot)
+        except (KeyError, TypeError, ValueError):
+            slot_results.append(
+                {
+                    "slot": slot,
+                    "slot_id": slot.get("slot_id"),
+                    "product_name": slot_name(slot),
+                    "score": 0.0,
+                    "status": "WARNING",
+                    "label": "WARNING",
+                }
+            )
+            continue
+
+        slot_box_xyxy = (x, y, x + w, y + h)
+        match = best_matching_detection(slot_box_xyxy, slot_type, detections)
+
+        if match is None:
+            status = "PROMO_MISSING" if slot_type == "promo" else "MISSING"
+            label = "PROMO MISSING" if status == "PROMO_MISSING" else "MISSING"
+            score = 0.0
+            missing_items.append(
+                {
+                    "slot_id": slot.get("slot_id"),
+                    "product_name": slot_name(slot),
+                    "score": score,
+                    "status": status,
+                }
+            )
+        else:
+            detection, overlap = match
+            score = round(float(detection.get("confidence", 0.0)), 4)
+            status = "PASS"
+            label = "PASS"
+
+        slot_results.append(
+            {
+                "slot": slot,
+                "slot_id": slot.get("slot_id"),
+                "product_name": slot_name(slot),
+                "score": score,
+                "status": status,
+                "label": label,
+            }
+        )
+
+    return missing_items, slot_results
+
+
 def draw_label(
     image: np.ndarray,
     text: str,
@@ -664,6 +823,42 @@ def draw_yolo_style_boxes(
 
     return annotated
 
+def draw_yolo_detection_boxes(
+    image: np.ndarray,
+    detections: List[Dict],
+) -> np.ndarray:
+    annotated = image.copy()
+    image_h, image_w = annotated.shape[:2]
+
+    for detection in detections:
+        class_name = detection.get("class_name")
+        if class_name not in {"product", "promo"}:
+            continue
+
+        try:
+            confidence = float(detection.get("confidence", 0.0))
+            x1 = int(detection.get("x1", 0))
+            y1 = int(detection.get("y1", 0))
+            x2 = int(detection.get("x2", 0))
+            y2 = int(detection.get("y2", 0))
+        except (TypeError, ValueError):
+            continue
+
+        x1 = max(0, min(x1, image_w - 1))
+        y1 = max(0, min(y1, image_h - 1))
+        x2 = max(0, min(x2, image_w - 1))
+        y2 = max(0, min(y2, image_h - 1))
+
+        if x2 <= x1 or y2 <= y1:
+            continue
+
+        color = PROMO_PASS_COLOR if class_name == "promo" else BOX_COLORS["PASS"]
+        label = f"{class_name} {confidence:.2f}"
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+        draw_label(annotated, label, x1, y1, x2 - x1, y2 - y1, color)
+
+    return annotated
+
 
 def save_annotated_image(image: np.ndarray) -> str:
     os.makedirs(ANNOTATED_DIR, exist_ok=True)
@@ -679,6 +874,162 @@ def save_aligned_debug_image(image: np.ndarray, model_id: str) -> str:
     image_path = os.path.join(ANNOTATED_DIR, image_name)
     cv2.imwrite(image_path, image)
     return image_name
+
+def filter_yolo_only_detections(detections: List[Dict]) -> List[Dict]:
+    useful_detections = []
+
+    for detection in detections:
+        class_name = detection.get("class_name")
+        if class_name not in {"product", "promo"}:
+            continue
+
+        try:
+            confidence = float(detection.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            continue
+
+        if confidence < YOLO_CONFIDENCE_THRESHOLD:
+            continue
+
+        normalized_detection = dict(detection)
+        normalized_detection["confidence"] = confidence
+        useful_detections.append(normalized_detection)
+
+    return useful_detections
+
+
+def count_yolo_detections(detections: List[Dict]) -> Tuple[int, int, int]:
+    product_count = sum(
+        1 for detection in detections if detection.get("class_name") == "product"
+    )
+    promo_count = sum(
+        1 for detection in detections if detection.get("class_name") == "promo"
+    )
+    return product_count, promo_count, product_count + promo_count
+
+
+def classify_yolo_only_result(
+    product_count: int,
+    promo_count: int,
+    total_count: int,
+) -> Tuple[str, Optional[str]]:
+    if total_count == 0:
+        return (
+            "NEED_RETAKE",
+            "No shelf products or promo tags detected. Please retake the photo.",
+        )
+
+    if product_count >= YOLO_PRODUCT_PASS_MIN and promo_count >= YOLO_PROMO_PASS_MIN:
+        return "PASS", None
+
+    if product_count >= YOLO_PRODUCT_WARNING_MIN:
+        return "WARNING", None
+
+    return "FAIL", None
+
+
+def yolo_only_metric_fields(
+    product_count: int,
+    promo_count: int,
+    total_count: int,
+) -> Dict:
+    product_rate = min(product_count / max(YOLO_PRODUCT_PASS_MIN, 1), 1.0)
+    promo_rate = min(promo_count / max(YOLO_PROMO_PASS_MIN, 1), 1.0)
+    expected_total = YOLO_PRODUCT_PASS_MIN + YOLO_PROMO_PASS_MIN
+    overall_score = min(total_count / max(expected_total, 1), 1.0)
+
+    return {
+        "product_total": product_count,
+        "product_missing_count": 0,
+        "product_pass_rate": round(float(product_rate), 4),
+        "promo_total": promo_count,
+        "promo_missing_count": 0,
+        "promo_pass_rate": round(float(promo_rate), 4),
+        "overall_compliance_score": round(float(overall_score), 4),
+    }
+
+
+def analyze_yolo_only(
+    uploaded_img: np.ndarray,
+    model_result: Dict,
+    detected_model: str,
+    model_score: float,
+) -> Optional[Dict]:
+    print("[YOLO_ONLY] Running YOLO-only detection")
+
+    aligned_img = model_result.get("aligned_image")
+    use_aligned_image = (
+        detected_model in YOLO_SUPPORTED_MODELS and aligned_img is not None
+    )
+
+    if use_aligned_image:
+        yolo_img = aligned_img
+        response_model = detected_model
+        print("[YOLO_ONLY] Using aligned image")
+    else:
+        yolo_img = uploaded_img
+        response_model = "YOLO_ONLY"
+        print("[YOLO_ONLY] Using original uploaded image")
+
+    try:
+        from yolo_detector import detect_objects
+
+        detections = detect_objects(
+            yolo_img,
+            confidence_threshold=YOLO_CONFIDENCE_THRESHOLD,
+        )
+    except Exception as exc:
+        print(f"[YOLO] Fallback to similarity check: {exc}")
+        return None
+
+    useful_detections = filter_yolo_only_detections(detections)
+    product_count, promo_count, total_count = count_yolo_detections(useful_detections)
+    result, reason = classify_yolo_only_result(
+        product_count,
+        promo_count,
+        total_count,
+    )
+
+    print(
+        f"[YOLO_ONLY] product_count={product_count} "
+        f"promo_count={promo_count} total={total_count}"
+    )
+    print(f"[YOLO_ONLY] result={result}")
+
+    if total_count == 0:
+        annotated = draw_banner(
+            yolo_img,
+            "NEED RETAKE",
+            BOX_COLORS["UNKNOWN_MODEL"],
+        )
+    else:
+        annotated = draw_yolo_detection_boxes(yolo_img, useful_detections)
+
+    annotated_image_name = save_annotated_image(annotated)
+    response = {
+        "detected_model": response_model,
+        "model_score": model_score,
+        "result": result,
+        "missing_count": 0,
+        "missing_items": [],
+        "annotated_image_name": annotated_image_name,
+        "analysis_mode": "yolo_only",
+        "product_count": product_count,
+        "promo_count": promo_count,
+        "yolo_detection_count": total_count,
+        **yolo_only_metric_fields(product_count, promo_count, total_count),
+    }
+
+    if use_aligned_image:
+        response["aligned_debug_image_name"] = save_aligned_debug_image(
+            yolo_img,
+            response_model,
+        )
+
+    if reason:
+        response["reason"] = reason
+
+    return response
 
 
 def check_missing_items(uploaded_img: np.ndarray, model_id: str) -> List[Dict]:
@@ -714,6 +1065,16 @@ def analyze_image(image_path: str) -> Dict:
     model_result = detect_shelf_model(uploaded_img)
     detected_model = model_result["detected_model"]
     model_score = float(model_result["model_score"])
+
+    if USE_YOLO_ONLY_MODE:
+        yolo_only_response = analyze_yolo_only(
+            uploaded_img,
+            model_result,
+            detected_model,
+            model_score,
+        )
+        if yolo_only_response is not None:
+            return yolo_only_response
 
     if model_result.get("result") == "NEED_RETAKE":
         annotated = draw_banner(uploaded_img, "NEED RETAKE", BOX_COLORS["UNKNOWN_MODEL"])
@@ -766,12 +1127,17 @@ def analyze_image(image_path: str) -> Dict:
             **summary,
         }
 
-    missing_items, slot_results = inspect_slots(
-        aligned_img,
-        detected_model,
-        slots,
-        ref_img=ref_img,
-    )
+    yolo_result = inspect_slots_with_yolo(aligned_img, detected_model, slots)
+    if yolo_result is None:
+        missing_items, slot_results = inspect_slots(
+            aligned_img,
+            detected_model,
+            slots,
+            ref_img=ref_img,
+        )
+    else:
+        missing_items, slot_results = yolo_result
+
     summary = compliance_summary(slots, slot_results)
     result = classify_result(summary)
     annotated = draw_yolo_style_boxes(aligned_img, slots, slot_results)
