@@ -14,8 +14,14 @@ ANNOTATED_DIR = os.path.join(BASE_DIR, "annotated")
 
 IMAGE_SIZE = (800, 600)
 MODEL_THRESHOLD = 0.30
-SLOT_THRESHOLD = 0.62
-SLOT_WARNING_THRESHOLD = 0.72
+MIN_MATCH_COUNT = 12
+MIN_INLIER_RATIO = 0.25
+DEFAULT_PRODUCT_THRESHOLD = 0.55
+DEFAULT_PROMO_THRESHOLD = 0.50
+ORB_FEATURE_COUNT = 2000
+ORB_RATIO_TEST = 0.75
+RANSAC_REPROJECTION_THRESHOLD = 5.0
+ALIGNMENT_FAILURE_REASON = "Image is too tilted or shelf cannot be aligned with reference."
 
 ACTIVE_MODELS = ["MODEL_A", "MODEL_B", "MODEL_C"]
 
@@ -63,6 +69,89 @@ def calc_ssim(img_a: np.ndarray, img_b: np.ndarray) -> float:
     gray_b = to_gray(img_b)
     score = ssim(gray_a, gray_b)
     return round(float(score), 4)
+
+
+def alignment_model_score(similarity_score: float, inlier_ratio: float, inlier_count: int) -> float:
+    bounded_similarity = max(0.0, min(float(similarity_score), 1.0))
+    bounded_inlier_ratio = max(0.0, min(float(inlier_ratio), 1.0))
+    inlier_strength = min(float(inlier_count) / max(MIN_MATCH_COUNT * 3, 1), 1.0)
+    score = (bounded_similarity * 0.70) + (bounded_inlier_ratio * 0.20) + (inlier_strength * 0.10)
+    return round(float(score), 4)
+
+
+def align_image_to_reference(uploaded_img: np.ndarray, ref_img: np.ndarray) -> Optional[Dict]:
+    uploaded_gray = to_gray(uploaded_img)
+    ref_gray = to_gray(ref_img)
+    orb = cv2.ORB_create(nfeatures=ORB_FEATURE_COUNT)
+
+    uploaded_keypoints, uploaded_descriptors = orb.detectAndCompute(uploaded_gray, None)
+    ref_keypoints, ref_descriptors = orb.detectAndCompute(ref_gray, None)
+
+    if uploaded_descriptors is None or ref_descriptors is None:
+        return None
+
+    if len(uploaded_keypoints) < MIN_MATCH_COUNT or len(ref_keypoints) < MIN_MATCH_COUNT:
+        return None
+
+    matcher = cv2.BFMatcher(cv2.NORM_HAMMING)
+    raw_matches = matcher.knnMatch(uploaded_descriptors, ref_descriptors, k=2)
+    good_matches = []
+
+    for pair in raw_matches:
+        if len(pair) != 2:
+            continue
+
+        best_match, next_match = pair
+        if best_match.distance < ORB_RATIO_TEST * next_match.distance:
+            good_matches.append(best_match)
+
+    if len(good_matches) < MIN_MATCH_COUNT:
+        return None
+
+    uploaded_points = np.float32(
+        [uploaded_keypoints[match.queryIdx].pt for match in good_matches]
+    ).reshape(-1, 1, 2)
+    ref_points = np.float32(
+        [ref_keypoints[match.trainIdx].pt for match in good_matches]
+    ).reshape(-1, 1, 2)
+
+    try:
+        homography, mask = cv2.findHomography(
+            uploaded_points,
+            ref_points,
+            cv2.RANSAC,
+            RANSAC_REPROJECTION_THRESHOLD,
+        )
+    except cv2.error:
+        return None
+
+    if homography is None or mask is None:
+        return None
+
+    inlier_count = int(mask.ravel().sum())
+    inlier_ratio = inlier_count / len(good_matches)
+
+    if inlier_count < MIN_MATCH_COUNT or inlier_ratio < MIN_INLIER_RATIO:
+        return None
+
+    ref_h, ref_w = ref_img.shape[:2]
+
+    try:
+        aligned_img = cv2.warpPerspective(uploaded_img, homography, (ref_w, ref_h))
+    except cv2.error:
+        return None
+    similarity_score = calc_ssim(aligned_img, ref_img)
+    score = alignment_model_score(similarity_score, inlier_ratio, inlier_count)
+
+    return {
+        "aligned_image": aligned_img,
+        "homography": homography,
+        "match_count": len(good_matches),
+        "inlier_count": inlier_count,
+        "inlier_ratio": round(float(inlier_ratio), 4),
+        "similarity_score": similarity_score,
+        "score": score,
+    }
 
 
 def find_reference_file(model_key: str) -> Optional[str]:
@@ -120,19 +209,37 @@ def detect_shelf_model(uploaded_img: np.ndarray) -> Dict:
             "message": "No reference images found.",
         }
 
-    scores = {
-        model_id: calc_ssim(uploaded_img, ref_img)
-        for model_id, ref_img in refs.items()
-    }
+    alignments = {}
+    scores = {}
+
+    for model_id, ref_img in refs.items():
+        alignment = align_image_to_reference(uploaded_img, ref_img)
+        if alignment is None:
+            continue
+
+        alignments[model_id] = alignment
+        scores[model_id] = alignment["score"]
+
+    if not scores:
+        return {
+            "detected_model": "UNKNOWN",
+            "model_score": 0.0,
+            "scores": {},
+            "message": ALIGNMENT_FAILURE_REASON,
+            "reason": ALIGNMENT_FAILURE_REASON,
+            "result": "NEED_RETAKE",
+        }
+
     detected_model = max(scores, key=scores.get)
     model_score = scores[detected_model]
+    best_alignment = alignments[detected_model]
 
     if model_score < MODEL_THRESHOLD:
         return {
             "detected_model": "UNKNOWN",
             "model_score": model_score,
             "scores": scores,
-            "message": "Best reference score is below threshold.",
+            "message": "Best aligned reference score is below threshold.",
         }
 
     return {
@@ -140,6 +247,14 @@ def detect_shelf_model(uploaded_img: np.ndarray) -> Dict:
         "model_score": model_score,
         "scores": scores,
         "message": "success",
+        "aligned_image": best_alignment["aligned_image"],
+        "reference_image": refs[detected_model],
+        "alignment": {
+            "match_count": best_alignment["match_count"],
+            "inlier_count": best_alignment["inlier_count"],
+            "inlier_ratio": best_alignment["inlier_ratio"],
+            "similarity_score": best_alignment["similarity_score"],
+        },
     }
 
 
@@ -239,7 +354,7 @@ def truncate_label(text: str, max_chars: int = MAX_LABEL_CHARS) -> str:
     text = " ".join(str(text).split())
     if len(text) <= max_chars:
         return text
-    return f"{text[: max_chars - 1]}…"
+    return f"{text[: max_chars - 3]}..."
 
 
 def is_promo_slot(slot: Dict) -> bool:
@@ -250,52 +365,87 @@ def is_promo_slot(slot: Dict) -> bool:
     return "promo" in text or "tag" in text
 
 
+def slot_kind(slot: Dict) -> str:
+    return "promo" if is_promo_slot(slot) else "product"
+
+
+def slot_threshold(slot: Dict) -> float:
+    kind = slot_kind(slot)
+    default_threshold = (
+        DEFAULT_PROMO_THRESHOLD if kind == "promo" else DEFAULT_PRODUCT_THRESHOLD
+    )
+
+    try:
+        return float(slot.get("threshold", default_threshold))
+    except (TypeError, ValueError):
+        return default_threshold
+
+
+def log_slot_check(
+    model_id: str,
+    slot: Dict,
+    score: float,
+    threshold: float,
+    passed: bool,
+) -> None:
+    if model_id != "MODEL_B":
+        return
+
+    print(
+        "MODEL_B slot check",
+        "slot_id=", slot.get("slot_id"),
+        "type=", slot.get("type") or slot_kind(slot),
+        "score=", round(float(score), 4),
+        "threshold=", round(float(threshold), 4),
+        "passed=", passed,
+    )
+
+
 def annotation_style(slot: Dict, result: Dict) -> Tuple[str, Tuple[int, int, int]]:
     status = result.get("status", "WARNING")
-    name = result.get("product_name") or slot_name(slot)
     code = short_slot_code(result.get("slot_id") or slot.get("slot_id"))
     promo = is_promo_slot(slot)
 
     if status == "PASS":
-        if promo:
-            return (f"OK {code}" if code else "PROMO OK", PROMO_PASS_COLOR)
-        return (f"OK {code}" if code else "OK", BOX_COLORS["PASS"])
+        color = PROMO_PASS_COLOR if promo else BOX_COLORS["PASS"]
+        return (f"OK {code}" if code else "OK", color)
 
     if status in ["MISSING", "FAIL", "PROMO_MISSING"]:
-        label = "PROMO MISSING" if status == "PROMO_MISSING" else "MISSING"
-        detail = name or code
-        text = f"{label}: {detail}" if detail else label
-        return (truncate_label(text), BOX_COLORS["MISSING"])
+        return (f"MISS {code}" if code else "MISS", BOX_COLORS["MISSING"])
 
     if status in ["LOW_SCORE", "WARNING"]:
-        detail = code or name
-        text = f"LOW: {detail}" if detail else "LOW"
-        return (truncate_label(text), BOX_COLORS["LOW_SCORE"])
+        if promo:
+            return (f"MISS {code}" if code else "MISS", BOX_COLORS["LOW_SCORE"])
+        return (f"LOW {code}" if code else "LOW", BOX_COLORS["LOW_SCORE"])
 
-    return (truncate_label(status), BOX_COLORS["WARNING"])
+    return (code or str(status), BOX_COLORS["WARNING"])
 
 
 def inspect_slots(
     uploaded_img: np.ndarray,
     model_id: str,
     slots: List[Dict],
+    ref_img: Optional[np.ndarray] = None,
 ) -> Tuple[List[Dict], List[Dict]]:
-    ref_path = find_reference_file(model_id)
-    if not ref_path:
-        return [], []
-
-    ref_img = read_image(ref_path)
     if ref_img is None:
-        return [], []
+        ref_path = find_reference_file(model_id)
+        if not ref_path:
+            return [], []
 
+        ref_img = read_image(ref_path)
+        if ref_img is None:
+            return [], []
     missing_items = []
     slot_results = []
 
     for slot in slots:
+        threshold = slot_threshold(slot)
+
         try:
             uploaded_crop = crop_slot(uploaded_img, slot)
             ref_crop = crop_slot(ref_img, slot)
         except (KeyError, TypeError, ValueError):
+            log_slot_check(model_id, slot, 0.0, threshold, False)
             slot_results.append(
                 {
                     "slot": slot,
@@ -309,6 +459,7 @@ def inspect_slots(
             continue
 
         if uploaded_crop.size == 0 or ref_crop.size == 0:
+            log_slot_check(model_id, slot, 0.0, threshold, False)
             slot_results.append(
                 {
                     "slot": slot,
@@ -324,9 +475,14 @@ def inspect_slots(
         uploaded_crop = cv2.resize(uploaded_crop, (160, 160))
         ref_crop = cv2.resize(ref_crop, (160, 160))
         slot_score = calc_ssim(uploaded_crop, ref_crop)
+        passed = slot_score >= threshold
+        log_slot_check(model_id, slot, slot_score, threshold, passed)
 
-        if slot_score < SLOT_THRESHOLD:
-            status = "PROMO_MISSING" if is_promo_slot(slot) else "MISSING"
+        if passed:
+            status = "PASS"
+            label = "PASS"
+        else:
+            status = "PROMO_MISSING" if slot_kind(slot) == "promo" else "MISSING"
             label = "PROMO MISSING" if status == "PROMO_MISSING" else "MISSING"
             missing_items.append(
                 {
@@ -336,12 +492,6 @@ def inspect_slots(
                     "status": status,
                 }
             )
-        elif slot_score < SLOT_WARNING_THRESHOLD:
-            status = "LOW_SCORE"
-            label = "LOW SCORE"
-        else:
-            status = "PASS"
-            label = "PASS"
 
         slot_results.append(
             {
@@ -357,26 +507,102 @@ def inspect_slots(
     return missing_items, slot_results
 
 
+def pass_rate(total: int, missing_count: int) -> float:
+    if total <= 0:
+        return 1.0
+
+    return round((total - missing_count) / total, 4)
+
+
+def compliance_summary(slots: List[Dict], slot_results: List[Dict]) -> Dict:
+    product_total = 0
+    product_missing_count = 0
+    promo_total = 0
+    promo_missing_count = 0
+
+    for index, slot in enumerate(slots):
+        result = slot_results[index] if index < len(slot_results) else {}
+        status = result.get("status", "WARNING")
+        missing = status != "PASS"
+
+        if slot_kind(slot) == "promo":
+            promo_total += 1
+            if missing:
+                promo_missing_count += 1
+        else:
+            product_total += 1
+            if missing:
+                product_missing_count += 1
+
+    total_slots = product_total + promo_total
+    total_missing_count = product_missing_count + promo_missing_count
+    product_rate = pass_rate(product_total, product_missing_count)
+    promo_rate = pass_rate(promo_total, promo_missing_count)
+    overall_score = pass_rate(total_slots, total_missing_count)
+
+    return {
+        "product_total": product_total,
+        "product_missing_count": product_missing_count,
+        "product_pass_rate": product_rate,
+        "promo_total": promo_total,
+        "promo_missing_count": promo_missing_count,
+        "promo_pass_rate": promo_rate,
+        "overall_compliance_score": overall_score,
+    }
+
+
+def classify_result(summary: Dict) -> str:
+    product_pass_rate = float(summary.get("product_pass_rate", 0.0))
+    promo_pass_rate = float(summary.get("promo_pass_rate", 0.0))
+
+    if product_pass_rate >= 0.85 and promo_pass_rate >= 0.60:
+        return "PASS"
+
+    if product_pass_rate >= 0.70:
+        return "WARNING"
+
+    return "FAIL"
+
+
 def draw_label(
     image: np.ndarray,
     text: str,
     x: int,
     y: int,
+    w: int,
+    h: int,
     color: Tuple[int, int, int],
 ) -> None:
     text = truncate_label(text)
+    if not text:
+        return
+
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.45
+    font_scale = 0.34
     thickness = 1
-    padding = 3
+    padding = 2
 
     (text_w, text_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
-    label_width = min(text_w + padding * 2, image.shape[1] - 1)
+    label_width = text_w + padding * 2
     label_height = text_h + baseline + padding * 2
-    label_left = max(0, min(x, image.shape[1] - label_width - 1))
-    label_top = max(0, y - label_height)
-    label_right = min(image.shape[1] - 1, label_left + label_width)
-    label_bottom = min(image.shape[0] - 1, label_top + label_height)
+
+    if label_width > w:
+        return
+
+    if y >= label_height:
+        label_left = x
+        label_top = y - label_height
+    elif label_height <= h:
+        label_left = x
+        label_top = y
+    else:
+        return
+
+    label_right = label_left + label_width
+    label_bottom = label_top + label_height
+
+    if label_right > image.shape[1] or label_bottom > image.shape[0]:
+        return
 
     cv2.rectangle(
         image,
@@ -434,7 +660,7 @@ def draw_yolo_style_boxes(
             continue
 
         cv2.rectangle(annotated, (x, y), (x + w, y + h), color, 3)
-        draw_label(annotated, text, x, y, color)
+        draw_label(annotated, text, x, y, w, h, color)
 
     return annotated
 
@@ -447,10 +673,36 @@ def save_annotated_image(image: np.ndarray) -> str:
     return image_name
 
 
+def save_aligned_debug_image(image: np.ndarray, model_id: str) -> str:
+    os.makedirs(ANNOTATED_DIR, exist_ok=True)
+    image_name = f"aligned_{model_id.lower()}_{uuid.uuid4().hex}_debug.jpg"
+    image_path = os.path.join(ANNOTATED_DIR, image_name)
+    cv2.imwrite(image_path, image)
+    return image_name
+
+
 def check_missing_items(uploaded_img: np.ndarray, model_id: str) -> List[Dict]:
     planogram = load_planogram(model_id)
     slots = planogram.get("slots", []) or []
-    missing_items, _ = inspect_slots(uploaded_img, model_id, slots)
+    ref_path = find_reference_file(model_id)
+
+    if not ref_path:
+        return []
+
+    ref_img = read_image(ref_path)
+    if ref_img is None:
+        return []
+
+    alignment = align_image_to_reference(uploaded_img, ref_img)
+    if alignment is None:
+        return []
+
+    missing_items, _ = inspect_slots(
+        alignment["aligned_image"],
+        model_id,
+        slots,
+        ref_img=ref_img,
+    )
     return missing_items
 
 
@@ -463,6 +715,19 @@ def analyze_image(image_path: str) -> Dict:
     detected_model = model_result["detected_model"]
     model_score = float(model_result["model_score"])
 
+    if model_result.get("result") == "NEED_RETAKE":
+        annotated = draw_banner(uploaded_img, "NEED RETAKE", BOX_COLORS["UNKNOWN_MODEL"])
+        annotated_image_name = save_annotated_image(annotated)
+        return {
+            "detected_model": "UNKNOWN",
+            "model_score": model_score,
+            "result": "NEED_RETAKE",
+            "missing_count": 0,
+            "missing_items": [],
+            "annotated_image_name": annotated_image_name,
+            "reason": ALIGNMENT_FAILURE_REASON,
+        }
+
     if detected_model == "UNKNOWN":
         annotated = draw_banner(uploaded_img, "UNKNOWN MODEL", BOX_COLORS["UNKNOWN_MODEL"])
         annotated_image_name = save_annotated_image(annotated)
@@ -473,18 +738,23 @@ def analyze_image(image_path: str) -> Dict:
             "missing_count": 0,
             "missing_items": [],
             "annotated_image_name": annotated_image_name,
+            "reason": model_result.get("message"),
         }
 
+    aligned_img = model_result.get("aligned_image", uploaded_img)
+    ref_img = model_result.get("reference_image")
+    aligned_debug_image_name = save_aligned_debug_image(aligned_img, detected_model)
     planogram = load_planogram(detected_model)
     slots = planogram.get("slots", []) or []
 
     if not slots:
         annotated = draw_banner(
-            uploaded_img,
+            aligned_img,
             "NO SLOTS CONFIGURED",
             BOX_COLORS["WARNING"],
         )
         annotated_image_name = save_annotated_image(annotated)
+        summary = compliance_summary([], [])
         return {
             "detected_model": detected_model,
             "model_score": model_score,
@@ -492,11 +762,19 @@ def analyze_image(image_path: str) -> Dict:
             "missing_count": 0,
             "missing_items": [],
             "annotated_image_name": annotated_image_name,
+            "aligned_debug_image_name": aligned_debug_image_name,
+            **summary,
         }
 
-    missing_items, slot_results = inspect_slots(uploaded_img, detected_model, slots)
-    result = "PASS" if len(missing_items) == 0 else "FAIL"
-    annotated = draw_yolo_style_boxes(uploaded_img, slots, slot_results)
+    missing_items, slot_results = inspect_slots(
+        aligned_img,
+        detected_model,
+        slots,
+        ref_img=ref_img,
+    )
+    summary = compliance_summary(slots, slot_results)
+    result = classify_result(summary)
+    annotated = draw_yolo_style_boxes(aligned_img, slots, slot_results)
     annotated_image_name = save_annotated_image(annotated)
 
     return {
@@ -506,4 +784,6 @@ def analyze_image(image_path: str) -> Dict:
         "missing_count": len(missing_items),
         "missing_items": missing_items,
         "annotated_image_name": annotated_image_name,
+        "aligned_debug_image_name": aligned_debug_image_name,
+        **summary,
     }
