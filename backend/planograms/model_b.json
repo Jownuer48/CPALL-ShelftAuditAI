@@ -1,5 +1,726 @@
-﻿{
+{
   "model_id": "MODEL_B",
   "description": "Shelf reference model B",
-  "slots": []
+  "slots": [
+    {
+      "slot_id": "B_PRODUCT_01",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.17,
+      "y": 0.2104,
+      "w": 0.1057,
+      "h": 0.1029,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_02",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.2805,
+      "y": 0.214,
+      "w": 0.0952,
+      "h": 0.1086,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_03",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.389,
+      "y": 0.2254,
+      "w": 0.1514,
+      "h": 0.0943,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_04",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.5424,
+      "y": 0.2219,
+      "w": 0.0876,
+      "h": 0.0986,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_05",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.6376,
+      "y": 0.224,
+      "w": 0.079,
+      "h": 0.0986,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_06",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.7271,
+      "y": 0.2247,
+      "w": 0.0676,
+      "h": 0.0914,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_07",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.1938,
+      "y": 0.3511,
+      "w": 0.1619,
+      "h": 0.0807,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_08",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.3595,
+      "y": 0.3483,
+      "w": 0.1362,
+      "h": 0.0829,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_09",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.5119,
+      "y": 0.3611,
+      "w": 0.0533,
+      "h": 0.0736,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_10",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.5662,
+      "y": 0.3597,
+      "w": 0.0524,
+      "h": 0.0764,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_11",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.6243,
+      "y": 0.3769,
+      "w": 0.1067,
+      "h": 0.0557,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_12",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.7357,
+      "y": 0.3804,
+      "w": 0.0905,
+      "h": 0.0543,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_13",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.2186,
+      "y": 0.464,
+      "w": 0.1524,
+      "h": 0.0707,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_14",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.369,
+      "y": 0.4519,
+      "w": 0.1067,
+      "h": 0.075,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_15",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.4814,
+      "y": 0.4476,
+      "w": 0.0914,
+      "h": 0.08,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_16",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.5776,
+      "y": 0.4697,
+      "w": 0.1638,
+      "h": 0.0607,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_17",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.7481,
+      "y": 0.4604,
+      "w": 0.0733,
+      "h": 0.0686,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_18",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.2195,
+      "y": 0.5554,
+      "w": 0.1048,
+      "h": 0.1193,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_19",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.3262,
+      "y": 0.5504,
+      "w": 0.0762,
+      "h": 0.1264,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_20",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.4062,
+      "y": 0.5561,
+      "w": 0.0305,
+      "h": 0.125,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_21",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.4367,
+      "y": 0.554,
+      "w": 0.0362,
+      "h": 0.125,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_22",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.4805,
+      "y": 0.5761,
+      "w": 0.1152,
+      "h": 0.0993,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_23",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.5995,
+      "y": 0.6083,
+      "w": 0.1,
+      "h": 0.0657,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_24",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.7062,
+      "y": 0.609,
+      "w": 0.099,
+      "h": 0.0664,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_25",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.2167,
+      "y": 0.7054,
+      "w": 0.1552,
+      "h": 0.0843,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_26",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.3748,
+      "y": 0.7211,
+      "w": 0.0333,
+      "h": 0.0693,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_27",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.4157,
+      "y": 0.7211,
+      "w": 0.0419,
+      "h": 0.0664,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_28",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.4605,
+      "y": 0.7097,
+      "w": 0.0429,
+      "h": 0.0771,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_29",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.5024,
+      "y": 0.7147,
+      "w": 0.0257,
+      "h": 0.0714,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_30",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.5386,
+      "y": 0.7197,
+      "w": 0.0581,
+      "h": 0.0564,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_31",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.6071,
+      "y": 0.714,
+      "w": 0.0543,
+      "h": 0.075,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_32",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.6662,
+      "y": 0.7111,
+      "w": 0.0762,
+      "h": 0.08,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_33",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.7452,
+      "y": 0.7411,
+      "w": 0.019,
+      "h": 0.0293,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_34",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.7671,
+      "y": 0.7397,
+      "w": 0.0257,
+      "h": 0.0271,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_35",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.2348,
+      "y": 0.8076,
+      "w": 0.1124,
+      "h": 0.1093,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_36",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.3529,
+      "y": 0.8076,
+      "w": 0.0533,
+      "h": 0.1186,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_37",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.41,
+      "y": 0.8054,
+      "w": 0.0619,
+      "h": 0.1214,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_38",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.4767,
+      "y": 0.8126,
+      "w": 0.0486,
+      "h": 0.1136,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_39",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.5329,
+      "y": 0.814,
+      "w": 0.0629,
+      "h": 0.1164,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_40",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.6043,
+      "y": 0.8283,
+      "w": 0.0857,
+      "h": 0.1,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PRODUCT_41",
+      "type": "product",
+      "label": "Product group",
+      "x": 0.6986,
+      "y": 0.8333,
+      "w": 0.079,
+      "h": 0.0943,
+      "threshold": 0.55
+    },
+    {
+      "slot_id": "B_PROMO_01",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.2395,
+      "y": 0.3004,
+      "w": 0.0752,
+      "h": 0.0414,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_02",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.4357,
+      "y": 0.3019,
+      "w": 0.0752,
+      "h": 0.0421,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_03",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.6529,
+      "y": 0.3011,
+      "w": 0.0724,
+      "h": 0.0493,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_04",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.2567,
+      "y": 0.4061,
+      "w": 0.0695,
+      "h": 0.0464,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_05",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.4243,
+      "y": 0.4061,
+      "w": 0.0676,
+      "h": 0.0436,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_06",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.5443,
+      "y": 0.4076,
+      "w": 0.0676,
+      "h": 0.0421,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_07",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.6348,
+      "y": 0.4069,
+      "w": 0.0695,
+      "h": 0.0414,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_08",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.7233,
+      "y": 0.4061,
+      "w": 0.0733,
+      "h": 0.0429,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_09",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.2405,
+      "y": 0.5119,
+      "w": 0.0695,
+      "h": 0.0421,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_10",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.3929,
+      "y": 0.5097,
+      "w": 0.0676,
+      "h": 0.0471,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_11",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.4957,
+      "y": 0.5119,
+      "w": 0.0686,
+      "h": 0.04,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_12",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.6348,
+      "y": 0.5119,
+      "w": 0.0705,
+      "h": 0.0407,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_13",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.729,
+      "y": 0.5111,
+      "w": 0.0676,
+      "h": 0.0407,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_14",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.23,
+      "y": 0.6704,
+      "w": 0.0676,
+      "h": 0.035,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_15",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.329,
+      "y": 0.664,
+      "w": 0.0638,
+      "h": 0.0386,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_16",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.4138,
+      "y": 0.6647,
+      "w": 0.0714,
+      "h": 0.0407,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_17",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.509,
+      "y": 0.664,
+      "w": 0.0657,
+      "h": 0.0407,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_18",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.6138,
+      "y": 0.6626,
+      "w": 0.0676,
+      "h": 0.0443,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_19",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.7129,
+      "y": 0.6611,
+      "w": 0.0705,
+      "h": 0.0429,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_20",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.291,
+      "y": 0.769,
+      "w": 0.0648,
+      "h": 0.0364,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_21",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.3957,
+      "y": 0.769,
+      "w": 0.0676,
+      "h": 0.0386,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_22",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.4767,
+      "y": 0.7676,
+      "w": 0.0657,
+      "h": 0.0386,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_23",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.5452,
+      "y": 0.7654,
+      "w": 0.059,
+      "h": 0.0414,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_24",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.6071,
+      "y": 0.7647,
+      "w": 0.059,
+      "h": 0.0421,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_25",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.6738,
+      "y": 0.7697,
+      "w": 0.0638,
+      "h": 0.0386,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_26",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.7414,
+      "y": 0.7676,
+      "w": 0.06,
+      "h": 0.0386,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_27",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.2405,
+      "y": 0.9061,
+      "w": 0.0648,
+      "h": 0.0393,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_28",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.3957,
+      "y": 0.9076,
+      "w": 0.0619,
+      "h": 0.0393,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_29",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.5062,
+      "y": 0.909,
+      "w": 0.061,
+      "h": 0.0357,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_30",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.6195,
+      "y": 0.9119,
+      "w": 0.0619,
+      "h": 0.0321,
+      "threshold": 0.45
+    },
+    {
+      "slot_id": "B_PROMO_31",
+      "type": "promo",
+      "label": "Promo tag",
+      "x": 0.7024,
+      "y": 0.9076,
+      "w": 0.0667,
+      "h": 0.0364,
+      "threshold": 0.45
+    }
+  ]
 }
