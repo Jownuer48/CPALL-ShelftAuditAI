@@ -22,13 +22,26 @@ ORB_FEATURE_COUNT = 2000
 ORB_RATIO_TEST = 0.75
 RANSAC_REPROJECTION_THRESHOLD = 5.0
 ALIGNMENT_FAILURE_REASON = "Image is too tilted or shelf cannot be aligned with reference."
-USE_YOLO_ONLY_MODE = True
+ANALYSIS_MODE = "hybrid"
+SUPPORTED_ANALYSIS_MODES = {"yolo_only", "hybrid", "slot_similarity"}
+HYBRID_MODEL_IDS = ["MODEL_A", "MODEL_B"]
+USE_YOLO_ONLY_MODE = ANALYSIS_MODE == "yolo_only"
 YOLO_PRODUCT_PASS_MIN = 10
 YOLO_PROMO_PASS_MIN = 3
 YOLO_PRODUCT_WARNING_MIN = 5
 YOLO_CONFIDENCE_THRESHOLD = 0.25
+YOLO_PRODUCT_MIN_CONF = 0.60
+YOLO_PROMO_MIN_CONF = 0.45
+PRODUCT_SLOT_MIN_COVERAGE = 0.45
+PROMO_SLOT_MIN_COVERAGE = 0.30
+DETECTION_INSIDE_SLOT_MIN_RATIO = 0.60
+SLOT_APPEARANCE_MIN_SIMILARITY_PRODUCT = 0.45
+SLOT_APPEARANCE_MIN_SIMILARITY_PROMO = 0.35
+COUNT_SENSITIVE_GROUP_MIN_SIMILARITY = 0.65
+USE_SLOT_APPEARANCE_CHECK = True
 YOLO_SUPPORTED_MODELS = {"MODEL_A", "MODEL_B"}
 YOLO_IOU_THRESHOLD = 0.15
+HYBRID_SLOT_IOU_THRESHOLD = 0.10
 
 ACTIVE_MODELS = ["MODEL_A", "MODEL_B", "MODEL_C"]
 
@@ -77,6 +90,38 @@ def calc_ssim(img_a: np.ndarray, img_b: np.ndarray) -> float:
     score = ssim(gray_a, gray_b)
     return round(float(score), 4)
 
+
+def compute_crop_similarity(reference_crop: np.ndarray, uploaded_crop: np.ndarray) -> float:
+    if reference_crop is None or uploaded_crop is None:
+        return 0.0
+
+    if reference_crop.size == 0 or uploaded_crop.size == 0:
+        return 0.0
+
+    try:
+        ref_resized = cv2.resize(reference_crop, (128, 128))
+        uploaded_resized = cv2.resize(uploaded_crop, (128, 128))
+    except cv2.error:
+        return 0.0
+
+    ref_hsv = cv2.cvtColor(ref_resized, cv2.COLOR_BGR2HSV)
+    uploaded_hsv = cv2.cvtColor(uploaded_resized, cv2.COLOR_BGR2HSV)
+    ref_hist = cv2.calcHist([ref_hsv], [0, 1], None, [32, 32], [0, 180, 0, 256])
+    uploaded_hist = cv2.calcHist([uploaded_hsv], [0, 1], None, [32, 32], [0, 180, 0, 256])
+    cv2.normalize(ref_hist, ref_hist, 0, 1, cv2.NORM_MINMAX)
+    cv2.normalize(uploaded_hist, uploaded_hist, 0, 1, cv2.NORM_MINMAX)
+    hist_score = cv2.compareHist(ref_hist, uploaded_hist, cv2.HISTCMP_CORREL)
+    hist_score = max(0.0, min((float(hist_score) + 1.0) / 2.0, 1.0))
+
+    ref_gray = cv2.cvtColor(ref_resized, cv2.COLOR_BGR2GRAY)
+    uploaded_gray = cv2.cvtColor(uploaded_resized, cv2.COLOR_BGR2GRAY)
+    try:
+        ssim_score = ssim(ref_gray, uploaded_gray, data_range=255)
+    except (ValueError, ZeroDivisionError):
+        ssim_score = 0.0
+    ssim_score = max(0.0, min(float(ssim_score), 1.0))
+
+    return round(float((hist_score * 0.55) + (ssim_score * 0.45)), 4)
 
 def alignment_model_score(similarity_score: float, inlier_ratio: float, inlier_count: int) -> float:
     bounded_similarity = max(0.0, min(float(similarity_score), 1.0))
@@ -190,10 +235,11 @@ def reference_status_items() -> List[Dict]:
     return items
 
 
-def load_reference_images() -> Dict[str, np.ndarray]:
+def load_reference_images(model_ids: Optional[List[str]] = None) -> Dict[str, np.ndarray]:
     refs = {}
+    active_models = list(model_ids) if model_ids is not None else ACTIVE_MODELS
 
-    for model_id in ACTIVE_MODELS:
+    for model_id in active_models:
         path = find_reference_file(model_id)
         if not path:
             continue
@@ -205,8 +251,11 @@ def load_reference_images() -> Dict[str, np.ndarray]:
     return refs
 
 
-def detect_shelf_model(uploaded_img: np.ndarray) -> Dict:
-    refs = load_reference_images()
+def detect_shelf_model(
+    uploaded_img: np.ndarray,
+    model_ids: Optional[List[str]] = None,
+) -> Dict:
+    refs = load_reference_images(model_ids)
 
     if not refs:
         return {
@@ -559,16 +608,16 @@ def compliance_summary(slots: List[Dict], slot_results: List[Dict]) -> Dict:
 
 
 def classify_result(summary: Dict) -> str:
-    product_pass_rate = float(summary.get("product_pass_rate", 0.0))
-    promo_pass_rate = float(summary.get("promo_pass_rate", 0.0))
+    product_missing_count = int(summary.get("product_missing_count", 0) or 0)
+    promo_missing_count = int(summary.get("promo_missing_count", 0) or 0)
 
-    if product_pass_rate >= 0.85 and promo_pass_rate >= 0.60:
-        return "PASS"
+    if product_missing_count > 0:
+        return "FAIL"
 
-    if product_pass_rate >= 0.70:
+    if promo_missing_count > 0:
         return "WARNING"
 
-    return "FAIL"
+    return "PASS"
 
 
 def box_iou(box_a: Tuple[int, int, int, int], box_b: Tuple[int, int, int, int]) -> float:
@@ -617,6 +666,7 @@ def best_matching_detection(
     slot_box: Tuple[int, int, int, int],
     slot_type: str,
     detections: List[Dict],
+    iou_threshold: float = YOLO_IOU_THRESHOLD,
 ) -> Optional[Tuple[Dict, float]]:
     best_detection = None
     best_overlap = 0.0
@@ -628,7 +678,7 @@ def best_matching_detection(
 
         overlap = box_iou(slot_box, detection_box(detection))
         center_inside = detection_center_inside_slot(detection, slot_box)
-        if overlap < YOLO_IOU_THRESHOLD and not center_inside:
+        if overlap < iou_threshold and not center_inside:
             continue
 
         confidence = float(detection.get("confidence", 0.0))
@@ -908,6 +958,439 @@ def count_yolo_detections(detections: List[Dict]) -> Tuple[int, int, int]:
     return product_count, promo_count, product_count + promo_count
 
 
+def detection_confidence(detection: Dict) -> float:
+    try:
+        return float(detection.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def detection_min_confidence(class_name: str) -> float:
+    return YOLO_PROMO_MIN_CONF if class_name == "promo" else YOLO_PRODUCT_MIN_CONF
+
+
+def filter_hybrid_detections(
+    detections: List[Dict],
+    roi: Optional[Tuple[int, int, int, int]] = None,
+    slot_boxes: Optional[List[Tuple[int, int, int, int]]] = None,
+) -> List[Dict]:
+    filtered = []
+
+    for detection in detections:
+        class_name = detection.get("class_name")
+        if class_name not in {"product", "promo"}:
+            continue
+
+        confidence = detection_confidence(detection)
+        if confidence < detection_min_confidence(class_name):
+            continue
+
+        center_x, center_y = detection_center(detection)
+        if roi is not None and not point_inside_box(center_x, center_y, roi):
+            continue
+
+        if slot_boxes:
+            center_inside_slot = any(
+                point_inside_box(center_x, center_y, slot_box)
+                for slot_box in slot_boxes
+            )
+            union_ratio = detection_slot_union_inside_ratio(detection, slot_boxes)
+            if (
+                not center_inside_slot
+                and union_ratio < DETECTION_INSIDE_SLOT_MIN_RATIO
+            ):
+                continue
+
+        normalized_detection = dict(detection)
+        normalized_detection["confidence"] = confidence
+        filtered.append(normalized_detection)
+
+    return filtered
+
+def box_area(box: Tuple[int, int, int, int]) -> int:
+    x1, y1, x2, y2 = box
+    return max(0, x2 - x1) * max(0, y2 - y1)
+
+
+def intersection_area(
+    box_a: Tuple[int, int, int, int],
+    box_b: Tuple[int, int, int, int],
+) -> int:
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    return max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+
+
+def detection_center(detection: Dict) -> Tuple[float, float]:
+    x1, y1, x2, y2 = detection_box(detection)
+    return (x1 + x2) / 2.0, (y1 + y2) / 2.0
+
+
+def point_inside_box(
+    x: float,
+    y: float,
+    box: Tuple[int, int, int, int],
+) -> bool:
+    x1, y1, x2, y2 = box
+    return x1 <= x <= x2 and y1 <= y <= y2
+
+
+def detection_inside_slot_ratio(
+    slot_box: Tuple[int, int, int, int],
+    detection: Dict,
+) -> float:
+    detection_area = box_area(detection_box(detection))
+    if detection_area <= 0:
+        return 0.0
+
+    return float(intersection_area(slot_box, detection_box(detection)) / detection_area)
+
+
+def detection_slot_union_inside_ratio(
+    detection: Dict,
+    slot_boxes: List[Tuple[int, int, int, int]],
+) -> float:
+    detection_area = box_area(detection_box(detection))
+    if detection_area <= 0:
+        return 0.0
+
+    covered_area = sum(intersection_area(slot_box, detection_box(detection)) for slot_box in slot_boxes)
+    covered_area = min(covered_area, detection_area)
+    return float(covered_area / detection_area)
+
+
+def valid_slot_boxes(
+    image: np.ndarray,
+    slots: List[Dict],
+) -> List[Tuple[int, int, int, int]]:
+    boxes = []
+
+    for slot in slots:
+        try:
+            boxes.append(slot_box_xyxy(image, slot))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    return boxes
+
+
+def target_shelf_roi(
+    image: np.ndarray,
+    slots: List[Dict],
+) -> Tuple[int, int, int, int]:
+    image_h, image_w = image.shape[:2]
+    boxes = valid_slot_boxes(image, slots)
+    if not boxes:
+        return 0, 0, image_w, image_h
+
+    min_x = min(box[0] for box in boxes)
+    min_y = min(box[1] for box in boxes)
+    max_x = max(box[2] for box in boxes)
+    max_y = max(box[3] for box in boxes)
+    pad_x = int(round(image_w * 0.03))
+    pad_y = int(round(image_h * 0.03))
+
+    return (
+        max(0, min_x - pad_x),
+        max(0, min_y - pad_y),
+        min(image_w, max_x + pad_x),
+        min(image_h, max_y + pad_y),
+    )
+
+
+def mask_image_to_roi(
+    image: np.ndarray,
+    roi: Tuple[int, int, int, int],
+) -> np.ndarray:
+    x1, y1, x2, y2 = roi
+    masked = np.zeros_like(image)
+    masked[y1:y2, x1:x2] = image[y1:y2, x1:x2]
+    return masked
+
+def slot_detection_coverage(
+    slot_box: Tuple[int, int, int, int],
+    detection: Dict,
+) -> float:
+    slot_area = box_area(slot_box)
+    if slot_area <= 0:
+        return 0.0
+
+    return float(intersection_area(slot_box, detection_box(detection)) / slot_area)
+
+
+def slot_min_coverage(slot_type: str) -> float:
+    return PROMO_SLOT_MIN_COVERAGE if slot_type == "promo" else PRODUCT_SLOT_MIN_COVERAGE
+
+
+def parse_slot_count(value) -> Optional[int]:
+    if value in [None, ""]:
+        return None
+
+    try:
+        return max(0, int(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def slot_count_requirements(slot: Dict) -> Tuple[Optional[int], Optional[int], int]:
+    expected_count = parse_slot_count(slot.get("expected_count"))
+    min_count = parse_slot_count(slot.get("min_count"))
+    required_count = min_count if min_count is not None else expected_count
+
+    if required_count is None:
+        required_count = 1
+
+    return expected_count, min_count, required_count
+
+
+def parse_slot_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, (int, float)):
+        return value != 0
+
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    return False
+
+
+def slot_requires_appearance_check(
+    slot: Dict,
+    expected_count: Optional[int] = None,
+    min_count: Optional[int] = None,
+) -> bool:
+    has_expected_count = (
+        expected_count is not None
+        if expected_count is not None
+        else parse_slot_count(slot.get("expected_count")) is not None
+    )
+    has_min_count = (
+        min_count is not None
+        if min_count is not None
+        else parse_slot_count(slot.get("min_count")) is not None
+    )
+
+    return (
+        has_expected_count
+        or has_min_count
+        or parse_slot_bool(slot.get("requires_appearance_check"))
+    )
+
+
+def hybrid_detection_matches_slot(
+    slot_box: Tuple[int, int, int, int],
+    slot_type: str,
+    detection: Dict,
+) -> Tuple[bool, float, float]:
+    if detection.get("class_name") != slot_type:
+        return False, 0.0, 0.0
+
+    if detection_confidence(detection) < detection_min_confidence(slot_type):
+        return False, 0.0, 0.0
+
+    coverage = slot_detection_coverage(slot_box, detection)
+    inside_ratio = detection_inside_slot_ratio(slot_box, detection)
+    center_x, center_y = detection_center(detection)
+    center_inside = point_inside_box(center_x, center_y, slot_box)
+    center_and_inside = center_inside and inside_ratio >= DETECTION_INSIDE_SLOT_MIN_RATIO
+    coverage_match = coverage >= slot_min_coverage(slot_type)
+    return center_and_inside or coverage_match, coverage, inside_ratio
+
+def slot_appearance_threshold(slot_type: str) -> float:
+    return (
+        SLOT_APPEARANCE_MIN_SIMILARITY_PROMO
+        if slot_type == "promo"
+        else SLOT_APPEARANCE_MIN_SIMILARITY_PRODUCT
+    )
+
+
+def crop_box(image: Optional[np.ndarray], box: Tuple[int, int, int, int]) -> Optional[np.ndarray]:
+    if image is None:
+        return None
+
+    image_h, image_w = image.shape[:2]
+    x1, y1, x2, y2 = box
+    x1 = max(0, min(x1, image_w - 1))
+    y1 = max(0, min(y1, image_h - 1))
+    x2 = max(0, min(x2, image_w))
+    y2 = max(0, min(y2, image_h))
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    return image[y1:y2, x1:x2]
+
+
+def detection_key(detection: Dict) -> Tuple:
+    return (
+        detection.get("class_name"),
+        int(detection.get("x1", 0)),
+        int(detection.get("y1", 0)),
+        int(detection.get("x2", 0)),
+        int(detection.get("y2", 0)),
+        round(detection_confidence(detection), 4),
+    )
+
+
+def unique_detections(detections: List[Dict]) -> List[Dict]:
+    unique = []
+    seen = set()
+
+    for detection in detections:
+        key = detection_key(detection)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(detection)
+
+    return unique
+
+
+def matching_hybrid_detections(
+    slot_box: Tuple[int, int, int, int],
+    slot_type: str,
+    detections: List[Dict],
+) -> Tuple[List[Dict], float, float, float]:
+    matches = []
+    best_match_confidence = 0.0
+    best_match_coverage = 0.0
+    best_match_inside_ratio = 0.0
+    best_candidate_confidence = 0.0
+    best_candidate_coverage = 0.0
+    best_candidate_inside_ratio = 0.0
+
+    for detection in detections:
+        if detection.get("class_name") != slot_type:
+            continue
+
+        confidence = detection_confidence(detection)
+        matched, coverage, inside_ratio = hybrid_detection_matches_slot(
+            slot_box,
+            slot_type,
+            detection,
+        )
+
+        if coverage > best_candidate_coverage or (
+            coverage == best_candidate_coverage and confidence > best_candidate_confidence
+        ):
+            best_candidate_coverage = coverage
+            best_candidate_confidence = confidence
+            best_candidate_inside_ratio = inside_ratio
+
+        if not matched:
+            continue
+
+        matches.append(detection)
+        if coverage > best_match_coverage or (
+            coverage == best_match_coverage and confidence > best_match_confidence
+        ):
+            best_match_coverage = coverage
+            best_match_confidence = confidence
+            best_match_inside_ratio = inside_ratio
+
+    if matches:
+        return matches, best_match_confidence, best_match_coverage, best_match_inside_ratio
+
+    return matches, best_candidate_confidence, best_candidate_coverage, best_candidate_inside_ratio
+
+
+def hybrid_slot_detection_counts(
+    slot_box: Tuple[int, int, int, int],
+    slot_type: str,
+    detections: List[Dict],
+) -> Tuple[int, float, float, float]:
+    detected_count = 0
+    best_match_confidence = 0.0
+    best_match_coverage = 0.0
+    best_match_inside_ratio = 0.0
+    best_candidate_confidence = 0.0
+    best_candidate_coverage = 0.0
+    best_candidate_inside_ratio = 0.0
+
+    for detection in detections:
+        if detection.get("class_name") != slot_type:
+            continue
+
+        confidence = detection_confidence(detection)
+        matched, coverage, inside_ratio = hybrid_detection_matches_slot(
+            slot_box,
+            slot_type,
+            detection,
+        )
+
+        if coverage > best_candidate_coverage or (
+            coverage == best_candidate_coverage and confidence > best_candidate_confidence
+        ):
+            best_candidate_coverage = coverage
+            best_candidate_confidence = confidence
+            best_candidate_inside_ratio = inside_ratio
+
+        if not matched:
+            continue
+
+        detected_count += 1
+        if coverage > best_match_coverage or (
+            coverage == best_match_coverage and confidence > best_match_confidence
+        ):
+            best_match_coverage = coverage
+            best_match_confidence = confidence
+            best_match_inside_ratio = inside_ratio
+
+    if detected_count > 0:
+        return detected_count, best_match_confidence, best_match_coverage, best_match_inside_ratio
+
+    return detected_count, best_candidate_confidence, best_candidate_coverage, best_candidate_inside_ratio
+
+def best_hybrid_slot_detection(
+    slot_box: Tuple[int, int, int, int],
+    slot_type: str,
+    detections: List[Dict],
+) -> Tuple[Optional[Dict], float, float]:
+    best_match = None
+    best_match_coverage = 0.0
+    best_match_confidence = 0.0
+    best_candidate_coverage = 0.0
+    best_candidate_confidence = 0.0
+    min_confidence = detection_min_confidence(slot_type)
+    min_coverage = slot_min_coverage(slot_type)
+
+    for detection in detections:
+        if detection.get("class_name") != slot_type:
+            continue
+
+        confidence = detection_confidence(detection)
+        coverage = slot_detection_coverage(slot_box, detection)
+
+        if coverage > best_candidate_coverage or (
+            coverage == best_candidate_coverage and confidence > best_candidate_confidence
+        ):
+            best_candidate_coverage = coverage
+            best_candidate_confidence = confidence
+
+        if confidence < min_confidence:
+            continue
+
+        center_inside = detection_center_inside_slot(detection, slot_box)
+        if not center_inside and coverage < min_coverage:
+            continue
+
+        if coverage > best_match_coverage or (
+            coverage == best_match_coverage and confidence > best_match_confidence
+        ):
+            best_match = detection
+            best_match_coverage = coverage
+            best_match_confidence = confidence
+
+    if best_match is not None:
+        return best_match, best_match_confidence, best_match_coverage
+
+    return None, best_candidate_confidence, best_candidate_coverage
+
 def classify_yolo_only_result(
     product_count: int,
     promo_count: int,
@@ -1032,6 +1515,362 @@ def analyze_yolo_only(
     return response
 
 
+def selected_analysis_mode() -> str:
+    mode = str(ANALYSIS_MODE).strip().lower()
+    if mode in SUPPORTED_ANALYSIS_MODES:
+        return mode
+
+    return "hybrid"
+
+
+def expected_slot_type(slot: Dict) -> str:
+    slot_type = str(slot.get("type", "")).strip().lower()
+    if slot_type in {"product", "promo"}:
+        return slot_type
+
+    return slot_kind(slot)
+
+
+def slot_box_xyxy(image: np.ndarray, slot: Dict) -> Tuple[int, int, int, int]:
+    image_h, image_w = image.shape[:2]
+
+    x1 = int(float(slot["x"]) * image_w)
+    y1 = int(float(slot["y"]) * image_h)
+    x2 = int((float(slot["x"]) + float(slot["w"])) * image_w)
+    y2 = int((float(slot["y"]) + float(slot["h"])) * image_h)
+
+    x1 = max(0, min(x1, image_w - 1))
+    y1 = max(0, min(y1, image_h - 1))
+    x2 = max(0, min(x2, image_w))
+    y2 = max(0, min(y2, image_h))
+
+    if x2 <= x1 or y2 <= y1:
+        raise ValueError("Invalid slot coordinates")
+
+    return x1, y1, x2, y2
+
+
+def evaluate_slots_with_yolo_detections(
+    aligned_img: np.ndarray,
+    ref_img: Optional[np.ndarray],
+    slots: List[Dict],
+    detections: List[Dict],
+) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    missing_items = []
+    slot_results = []
+    accepted_detections = []
+
+    for slot in slots:
+        slot_type = expected_slot_type(slot)
+        slot_id = slot.get("slot_id")
+        expected_count, min_count, required_count = slot_count_requirements(slot)
+        appearance_check = USE_SLOT_APPEARANCE_CHECK and slot_requires_appearance_check(
+            slot,
+            expected_count,
+            min_count,
+        )
+        appearance_similarity = None
+        appearance_threshold = slot_appearance_threshold(slot_type)
+        normal_presence_pass = False
+        print(f"[HYBRID] Slot {slot_id} appearance_check={appearance_check}")
+
+        try:
+            slot_box = slot_box_xyxy(aligned_img, slot)
+        except (KeyError, TypeError, ValueError):
+            appearance_similarity = 0.0 if appearance_check else None
+            print(f"[HYBRID] Slot {slot_id} normal_presence_pass={normal_presence_pass}")
+            sim_display = (
+                "n/a" if appearance_similarity is None else f"{appearance_similarity:.2f}"
+            )
+            print(
+                f"[HYBRID] Slot {slot_id} count=0/{required_count} "
+                f"sim={sim_display} passed=False reason=invalid slot coordinates"
+            )
+            slot_results.append(
+                {
+                    "slot": slot,
+                    "slot_id": slot_id,
+                    "product_name": slot_name(slot),
+                    "score": 0.0,
+                    "status": "WARNING",
+                    "label": "WARNING",
+                    "expected_count": expected_count,
+                    "min_count": min_count,
+                    "required_count": required_count,
+                    "detected_count": 0,
+                    "appearance_similarity": appearance_similarity,
+                    "reason": "invalid slot coordinates",
+                }
+            )
+            continue
+
+        matches, best_confidence, best_coverage, best_inside_ratio = matching_hybrid_detections(
+            slot_box,
+            slot_type,
+            detections,
+        )
+        detected_count = len(matches)
+        normal_presence_pass = detected_count > 0
+        print(f"[HYBRID] Slot {slot_id} normal_presence_pass={normal_presence_pass}")
+
+        if appearance_check:
+            reference_crop = crop_box(ref_img, slot_box)
+            uploaded_crop = crop_box(aligned_img, slot_box)
+            appearance_similarity = compute_crop_similarity(reference_crop, uploaded_crop)
+
+        effective_detected_count = detected_count
+        appearance_passed = True
+        if appearance_check:
+            appearance_passed = appearance_similarity >= appearance_threshold
+            grouped_count_passed = (
+                required_count > 1
+                and detected_count > 0
+                and detected_count < required_count
+                and appearance_similarity is not None
+                and appearance_similarity
+                >= max(appearance_threshold, COUNT_SENSITIVE_GROUP_MIN_SIMILARITY)
+            )
+            if grouped_count_passed:
+                effective_detected_count = required_count
+
+        count_passed = effective_detected_count >= required_count
+        if appearance_check:
+            passed = count_passed and appearance_passed
+
+            if not count_passed and not appearance_passed:
+                reason = "insufficient detections; appearance mismatch / possible background product"
+                log_reason = "insufficient detections; appearance mismatch"
+            elif not count_passed:
+                reason = "insufficient detections"
+                log_reason = reason
+            elif not appearance_passed:
+                reason = "appearance mismatch / possible background product"
+                log_reason = "appearance mismatch"
+            else:
+                reason = None
+                log_reason = "ok"
+        else:
+            passed = normal_presence_pass
+            if passed:
+                reason = None
+                log_reason = "ok"
+            else:
+                reason = "no valid matching YOLO detection"
+                log_reason = reason
+
+        sim_display = "n/a" if appearance_similarity is None else f"{appearance_similarity:.2f}"
+        print(
+            f"[HYBRID] Slot {slot_id} count={effective_detected_count}/{required_count} "
+            f"sim={sim_display} passed={passed} reason={log_reason}"
+        )
+
+        if not passed:
+            status = "PROMO_MISSING" if slot_type == "promo" else "MISSING"
+            label = "PROMO MISSING" if status == "PROMO_MISSING" else "MISSING"
+            score = 0.0
+            missing_items.append(
+                {
+                    "slot_id": slot_id,
+                    "product_name": slot_name(slot),
+                    "score": score,
+                    "status": status,
+                    "expected_count": expected_count,
+                    "detected_count": effective_detected_count,
+                    "required_count": required_count,
+                    "appearance_similarity": appearance_similarity,
+                    "reason": reason,
+                }
+            )
+        else:
+            score = round(best_confidence, 4)
+            status = "PASS"
+            label = "PASS"
+
+        if appearance_passed and matches:
+            accepted_detections.extend(matches)
+
+        slot_results.append(
+            {
+                "slot": slot,
+                "slot_id": slot_id,
+                "product_name": slot_name(slot),
+                "score": score,
+                "status": status,
+                "label": label,
+                "expected_count": expected_count,
+                "min_count": min_count,
+                "required_count": required_count,
+                "detected_count": detected_count,
+                "appearance_similarity": appearance_similarity,
+                "appearance_threshold": appearance_threshold if appearance_check else None,
+                "reason": reason,
+            }
+        )
+
+    return missing_items, slot_results, unique_detections(accepted_detections)
+
+
+def draw_hybrid_annotation(
+    image: np.ndarray,
+    detections: List[Dict],
+    slots: List[Dict],
+    slot_results: List[Dict],
+) -> np.ndarray:
+    annotated = draw_yolo_detection_boxes(image, detections)
+
+    for index, slot in enumerate(slots):
+        result = slot_results[index] if index < len(slot_results) else {}
+        if result.get("status") == "PASS":
+            continue
+
+        try:
+            x1, y1, x2, y2 = slot_box_xyxy(annotated, slot)
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        code = short_slot_code(result.get("slot_id") or slot.get("slot_id"))
+        detected_count = result.get("detected_count")
+        required_count = result.get("required_count")
+        appearance_similarity = result.get("appearance_similarity")
+        if detected_count is not None and required_count is not None:
+            count_text = f" {detected_count}/{required_count}"
+        else:
+            count_text = ""
+        if appearance_similarity is not None:
+            sim_text = f" sim={float(appearance_similarity):.2f}"
+        else:
+            sim_text = ""
+        label = f"MISS {code}{count_text}{sim_text}" if code else f"MISS{count_text}{sim_text}"
+        x = x1
+        y = y1
+        w = x2 - x1
+        h = y2 - y1
+        color = BOX_COLORS["MISSING"]
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 4)
+        draw_label(annotated, label, x, y, w, h, color)
+
+    return annotated
+
+
+def alignment_failure_response(
+    image: np.ndarray,
+    model_score: float,
+    analysis_mode: str,
+) -> Dict:
+    annotated = draw_banner(image, "NEED RETAKE", BOX_COLORS["UNKNOWN_MODEL"])
+    annotated_image_name = save_annotated_image(annotated)
+    return {
+        "detected_model": "UNKNOWN",
+        "model_score": model_score,
+        "result": "NEED_RETAKE",
+        "missing_count": 0,
+        "missing_items": [],
+        "annotated_image_name": annotated_image_name,
+        "reason": ALIGNMENT_FAILURE_REASON,
+        "analysis_mode": analysis_mode,
+        **compliance_summary([], []),
+    }
+
+
+def analyze_hybrid(
+    uploaded_img: np.ndarray,
+    model_result: Dict,
+    detected_model: str,
+    model_score: float,
+) -> Optional[Dict]:
+    print("[HYBRID] Running hybrid shelf audit")
+
+    aligned_img = model_result.get("aligned_image")
+    if detected_model not in HYBRID_MODEL_IDS or aligned_img is None:
+        print("[HYBRID] Alignment failed")
+        print("[HYBRID] result=NEED_RETAKE")
+        return alignment_failure_response(uploaded_img, model_score, "hybrid")
+
+    print(f"[HYBRID] Detected model: {detected_model}")
+    print("[HYBRID] Alignment success")
+
+    planogram = load_planogram(detected_model)
+    slots = planogram.get("slots", []) or []
+    ref_img = model_result.get("reference_image")
+    aligned_debug_image_name = save_aligned_debug_image(aligned_img, detected_model)
+
+    roi = target_shelf_roi(aligned_img, slots)
+    slot_boxes = valid_slot_boxes(aligned_img, slots)
+    print(f"[HYBRID] ROI: {roi[0]},{roi[1]},{roi[2]},{roi[3]}")
+    yolo_input = mask_image_to_roi(aligned_img, roi)
+
+    try:
+        from yolo_detector import detect_objects
+
+        detections = detect_objects(
+            yolo_input,
+            confidence_threshold=min(YOLO_PRODUCT_MIN_CONF, YOLO_PROMO_MIN_CONF),
+        )
+    except Exception as exc:
+        print(f"[YOLO] Fallback to similarity check: {exc}")
+        return None
+
+    raw_product_count, raw_promo_count, raw_total_count = count_yolo_detections(detections)
+    print(
+        f"[HYBRID] Raw detections: total={raw_total_count} "
+        f"product={raw_product_count} promo={raw_promo_count}"
+    )
+
+    useful_detections = filter_hybrid_detections(
+        detections,
+        roi=roi,
+        slot_boxes=slot_boxes,
+    )
+    product_count, promo_count, total_count = count_yolo_detections(useful_detections)
+    dropped_detection_count = max(0, raw_total_count - total_count)
+    print(
+        f"[HYBRID] ROI-filtered detections: total={total_count} "
+        f"product={product_count} promo={promo_count}"
+    )
+    print(f"[HYBRID] Dropped background detections: {dropped_detection_count}")
+
+    if not slots:
+        missing_items = []
+        slot_results = []
+        accepted_detections = []
+    else:
+        missing_items, slot_results, accepted_detections = evaluate_slots_with_yolo_detections(
+            aligned_img,
+            ref_img,
+            slots,
+            useful_detections,
+        )
+
+    rejected_detection_count = max(0, len(useful_detections) - len(accepted_detections))
+    print(f"[HYBRID] Accepted detections: {len(accepted_detections)}")
+    print(f"[HYBRID] Rejected detections: {rejected_detection_count}")
+
+    summary = compliance_summary(slots, slot_results)
+    result = classify_result(summary)
+    print(f"[HYBRID] product_pass_rate={summary['product_pass_rate']}")
+    print(f"[HYBRID] promo_pass_rate={summary['promo_pass_rate']}")
+    print(f"[HYBRID] Final result={result}")
+
+    annotated = draw_hybrid_annotation(
+        aligned_img,
+        accepted_detections,
+        slots,
+        slot_results,
+    )
+    annotated_image_name = save_annotated_image(annotated)
+
+    return {
+        "detected_model": detected_model,
+        "model_score": model_score,
+        "result": result,
+        "missing_count": len(missing_items),
+        "missing_items": missing_items,
+        "annotated_image_name": annotated_image_name,
+        "aligned_debug_image_name": aligned_debug_image_name,
+        "analysis_mode": "hybrid",
+        **summary,
+    }
+
 def check_missing_items(uploaded_img: np.ndarray, model_id: str) -> List[Dict]:
     planogram = load_planogram(model_id)
     slots = planogram.get("slots", []) or []
@@ -1057,37 +1896,16 @@ def check_missing_items(uploaded_img: np.ndarray, model_id: str) -> List[Dict]:
     return missing_items
 
 
-def analyze_image(image_path: str) -> Dict:
-    uploaded_img = read_image(image_path)
-    if uploaded_img is None:
-        raise ValueError(f"Could not read image: {image_path}")
-
-    model_result = detect_shelf_model(uploaded_img)
-    detected_model = model_result["detected_model"]
-    model_score = float(model_result["model_score"])
-
-    if USE_YOLO_ONLY_MODE:
-        yolo_only_response = analyze_yolo_only(
-            uploaded_img,
-            model_result,
-            detected_model,
-            model_score,
-        )
-        if yolo_only_response is not None:
-            return yolo_only_response
-
+def analyze_slot_similarity(
+    uploaded_img: np.ndarray,
+    model_result: Dict,
+    detected_model: str,
+    model_score: float,
+    analysis_mode: str = "slot_similarity",
+) -> Dict:
     if model_result.get("result") == "NEED_RETAKE":
-        annotated = draw_banner(uploaded_img, "NEED RETAKE", BOX_COLORS["UNKNOWN_MODEL"])
-        annotated_image_name = save_annotated_image(annotated)
-        return {
-            "detected_model": "UNKNOWN",
-            "model_score": model_score,
-            "result": "NEED_RETAKE",
-            "missing_count": 0,
-            "missing_items": [],
-            "annotated_image_name": annotated_image_name,
-            "reason": ALIGNMENT_FAILURE_REASON,
-        }
+        response = alignment_failure_response(uploaded_img, model_score, analysis_mode)
+        return response
 
     if detected_model == "UNKNOWN":
         annotated = draw_banner(uploaded_img, "UNKNOWN MODEL", BOX_COLORS["UNKNOWN_MODEL"])
@@ -1100,6 +1918,8 @@ def analyze_image(image_path: str) -> Dict:
             "missing_items": [],
             "annotated_image_name": annotated_image_name,
             "reason": model_result.get("message"),
+            "analysis_mode": analysis_mode,
+            **compliance_summary([], []),
         }
 
     aligned_img = model_result.get("aligned_image", uploaded_img)
@@ -1124,19 +1944,16 @@ def analyze_image(image_path: str) -> Dict:
             "missing_items": [],
             "annotated_image_name": annotated_image_name,
             "aligned_debug_image_name": aligned_debug_image_name,
+            "analysis_mode": analysis_mode,
             **summary,
         }
 
-    yolo_result = inspect_slots_with_yolo(aligned_img, detected_model, slots)
-    if yolo_result is None:
-        missing_items, slot_results = inspect_slots(
-            aligned_img,
-            detected_model,
-            slots,
-            ref_img=ref_img,
-        )
-    else:
-        missing_items, slot_results = yolo_result
+    missing_items, slot_results = inspect_slots(
+        aligned_img,
+        detected_model,
+        slots,
+        ref_img=ref_img,
+    )
 
     summary = compliance_summary(slots, slot_results)
     result = classify_result(summary)
@@ -1151,5 +1968,59 @@ def analyze_image(image_path: str) -> Dict:
         "missing_items": missing_items,
         "annotated_image_name": annotated_image_name,
         "aligned_debug_image_name": aligned_debug_image_name,
+        "analysis_mode": analysis_mode,
         **summary,
     }
+
+
+def analyze_image(image_path: str) -> Dict:
+    uploaded_img = read_image(image_path)
+    if uploaded_img is None:
+        raise ValueError(f"Could not read image: {image_path}")
+
+    mode = selected_analysis_mode()
+    model_ids = HYBRID_MODEL_IDS if mode == "hybrid" else None
+    model_result = detect_shelf_model(uploaded_img, model_ids=model_ids)
+    detected_model = model_result["detected_model"]
+    model_score = float(model_result["model_score"])
+
+    if mode == "hybrid":
+        hybrid_response = analyze_hybrid(
+            uploaded_img,
+            model_result,
+            detected_model,
+            model_score,
+        )
+        if hybrid_response is not None:
+            return hybrid_response
+
+        return analyze_slot_similarity(
+            uploaded_img,
+            model_result,
+            detected_model,
+            model_score,
+        )
+
+    if mode == "yolo_only":
+        yolo_only_response = analyze_yolo_only(
+            uploaded_img,
+            model_result,
+            detected_model,
+            model_score,
+        )
+        if yolo_only_response is not None:
+            return yolo_only_response
+
+        return analyze_slot_similarity(
+            uploaded_img,
+            model_result,
+            detected_model,
+            model_score,
+        )
+
+    return analyze_slot_similarity(
+        uploaded_img,
+        model_result,
+        detected_model,
+        model_score,
+    )

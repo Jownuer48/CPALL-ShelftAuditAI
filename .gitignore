@@ -79,6 +79,7 @@ yolov8n.pt
 
 backend/uploads/
 backend/annotated/
+backend/debug/
 backend/*.db-shm
 backend/*.db-wal
 

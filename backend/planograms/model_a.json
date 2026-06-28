@@ -90,7 +90,9 @@
       "y": 0.329,
       "w": 0.2219,
       "h": 0.1543,
-      "threshold": 0.45
+      "threshold": 0.45,
+      "expected_count": 4,
+      "min_count": 4
     },
     {
       "slot_id": "A_PRODUCT_10",
