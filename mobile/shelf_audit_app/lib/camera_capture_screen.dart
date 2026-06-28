@@ -187,9 +187,12 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
       width: cropWidth,
       height: cropHeight,
     );
-    final croppedBytes = Uint8List.fromList(img.encodeJpg(cropped, quality: 92));
+    final croppedBytes = Uint8List.fromList(
+      img.encodeJpg(cropped, quality: 92),
+    );
     final tempDir = await getTemporaryDirectory();
-    final croppedName = 'shelf_crop_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    final croppedName =
+        'shelf_crop_${DateTime.now().millisecondsSinceEpoch}.jpg';
     final croppedPath = '${tempDir.path}${Platform.pathSeparator}$croppedName';
     final croppedFile = File(croppedPath);
 
