@@ -8,6 +8,7 @@ __pycache__/
 # Virtual environment
 .venv/
 venv/
+backend.venv/
 backend/.venv/
 backend/venv/
 
@@ -77,9 +78,20 @@ Thumbs.db
 runs/
 yolov8n.pt
 
+experiments/sku110k/*
+!experiments/sku110k/.gitkeep
+
+backend/yolo_models/experiments/*
+!backend/yolo_models/experiments/.gitkeep
+
 backend/uploads/
 backend/annotated/
 backend/debug/
+!backend/debug/
+backend/debug/*
+!backend/debug/sku110k/
+backend/debug/sku110k/*
+!backend/debug/sku110k/.gitkeep
 backend/*.db-shm
 backend/*.db-wal
 
