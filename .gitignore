@@ -97,3 +97,19 @@ backend/*.db-wal
 
 datasets/shelf_audit/images/
 datasets/shelf_audit/labels/
+
+# Experiment / training outputs
+Ultralytics/
+backend/debug/
+experiments/*
+!experiments/.gitkeep
+
+backend/yolo_models/experiments/*
+!backend/yolo_models/experiments/.gitkeep
+
+# Temporary downloaded model weights
+/yolov8n.pt
+/yolov8s.pt
+/yolov8m.pt
+/yolov8l.pt
+/yolov8x.pt
