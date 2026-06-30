@@ -8,6 +8,7 @@ __pycache__/
 # Virtual environment
 .venv/
 venv/
+backend.venv/
 backend/.venv/
 backend/venv/
 
@@ -77,11 +78,38 @@ Thumbs.db
 runs/
 yolov8n.pt
 
+experiments/sku110k/*
+!experiments/sku110k/.gitkeep
+
+backend/yolo_models/experiments/*
+!backend/yolo_models/experiments/.gitkeep
+
 backend/uploads/
 backend/annotated/
 backend/debug/
+!backend/debug/
+backend/debug/*
+!backend/debug/sku110k/
+backend/debug/sku110k/*
+!backend/debug/sku110k/.gitkeep
 backend/*.db-shm
 backend/*.db-wal
 
 datasets/shelf_audit/images/
 datasets/shelf_audit/labels/
+
+# Experiment / training outputs
+Ultralytics/
+backend/debug/
+experiments/*
+!experiments/.gitkeep
+
+backend/yolo_models/experiments/*
+!backend/yolo_models/experiments/.gitkeep
+
+# Temporary downloaded model weights
+/yolov8n.pt
+/yolov8s.pt
+/yolov8m.pt
+/yolov8l.pt
+/yolov8x.pt
