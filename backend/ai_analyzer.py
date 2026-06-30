@@ -1,6 +1,7 @@
 import json
 import os
 import uuid
+from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
 import cv2
@@ -22,10 +23,22 @@ ORB_FEATURE_COUNT = 2000
 ORB_RATIO_TEST = 0.75
 RANSAC_REPROJECTION_THRESHOLD = 5.0
 ALIGNMENT_FAILURE_REASON = "Image is too tilted or shelf cannot be aligned with reference."
-ANALYSIS_MODE = "hybrid"
-SUPPORTED_ANALYSIS_MODES = {"yolo_only", "hybrid", "slot_similarity"}
+ANALYSIS_MODE = os.getenv("SHELF_AUDIT_ANALYSIS_MODE", "hybrid")
+SUPPORTED_ANALYSIS_MODES = {"yolo_only", "hybrid", "slot_similarity", "sku110k_planogram"}
 HYBRID_MODEL_IDS = ["MODEL_A", "MODEL_B"]
 USE_YOLO_ONLY_MODE = ANALYSIS_MODE == "yolo_only"
+SKU110K_PLANOGRAM_MODEL_PATH = os.path.join(
+    BASE_DIR,
+    "yolo_models",
+    "experiments",
+    "sku110k_product.pt",
+)
+SKU110K_PLANOGRAM_DISPLAY_MODEL_PATH = (
+    "backend/yolo_models/experiments/sku110k_product.pt"
+)
+SKU110K_PLANOGRAM_CONFIDENCE_THRESHOLD = 0.15
+SKU110K_SLOT_COVERAGE_THRESHOLD = 0.25
+SKU110K_SLOT_IOU_THRESHOLD = 0.15
 YOLO_PRODUCT_PASS_MIN = 10
 YOLO_PROMO_PASS_MIN = 3
 YOLO_PRODUCT_WARNING_MIN = 5
@@ -1523,6 +1536,87 @@ def selected_analysis_mode() -> str:
     return "hybrid"
 
 
+def ensure_sku110k_ultralytics_config_dir() -> None:
+    if os.environ.get("YOLO_CONFIG_DIR"):
+        return
+
+    config_dir = os.path.join(BASE_DIR, "debug", "sku110k", "ultralytics_config")
+    os.makedirs(config_dir, exist_ok=True)
+    os.environ["YOLO_CONFIG_DIR"] = config_dir
+
+
+@lru_cache(maxsize=1)
+def load_sku110k_planogram_model():
+    if not os.path.exists(SKU110K_PLANOGRAM_MODEL_PATH):
+        raise FileNotFoundError(
+            f"SKU110K model not found: {SKU110K_PLANOGRAM_MODEL_PATH}"
+        )
+
+    ensure_sku110k_ultralytics_config_dir()
+    try:
+        from ultralytics import YOLO
+    except ImportError as exc:
+        raise RuntimeError("ultralytics is not installed") from exc
+
+    model = YOLO(SKU110K_PLANOGRAM_MODEL_PATH)
+    print(
+        "[SKU110K_PLANOGRAM] loaded model "
+        f"{SKU110K_PLANOGRAM_DISPLAY_MODEL_PATH}"
+    )
+    return model
+
+
+def detect_sku110k_planogram_products(
+    image: np.ndarray,
+    confidence_threshold: float = SKU110K_PLANOGRAM_CONFIDENCE_THRESHOLD,
+) -> List[Dict]:
+    model = load_sku110k_planogram_model()
+    results = model.predict(
+        source=image,
+        conf=confidence_threshold,
+        device="cpu",
+        verbose=False,
+        save=False,
+    )
+
+    if not results:
+        print("[SKU110K_PLANOGRAM] detections count=0")
+        return []
+
+    boxes = getattr(results[0], "boxes", None)
+    if boxes is None:
+        print("[SKU110K_PLANOGRAM] detections count=0")
+        return []
+
+    image_h, image_w = image.shape[:2]
+    detections = []
+
+    for box in boxes:
+        confidence = float(box.conf[0].item())
+        x1, y1, x2, y2 = box.xyxy[0].tolist()
+        clipped_x1 = int(max(0, min(round(x1), image_w - 1)))
+        clipped_y1 = int(max(0, min(round(y1), image_h - 1)))
+        clipped_x2 = int(max(0, min(round(x2), image_w)))
+        clipped_y2 = int(max(0, min(round(y2), image_h)))
+
+        if clipped_x2 <= clipped_x1 or clipped_y2 <= clipped_y1:
+            continue
+
+        detections.append(
+            {
+                "class_name": "product",
+                "confidence": confidence,
+                "x1": clipped_x1,
+                "y1": clipped_y1,
+                "x2": clipped_x2,
+                "y2": clipped_y2,
+            }
+        )
+
+    print(f"[SKU110K_PLANOGRAM] detections count={len(detections)}")
+    return detections
+
+
 def expected_slot_type(slot: Dict) -> str:
     slot_type = str(slot.get("type", "")).strip().lower()
     if slot_type in {"product", "promo"}:
@@ -1548,6 +1642,217 @@ def slot_box_xyxy(image: np.ndarray, slot: Dict) -> Tuple[int, int, int, int]:
         raise ValueError("Invalid slot coordinates")
 
     return x1, y1, x2, y2
+
+
+def sku110k_detection_matches_slot(
+    slot_box: Tuple[int, int, int, int],
+    detection: Dict,
+) -> bool:
+    if detection.get("class_name") != "product":
+        return False
+
+    coverage = slot_detection_coverage(slot_box, detection)
+    overlap = box_iou(slot_box, detection_box(detection))
+    return (
+        detection_center_inside_slot(detection, slot_box)
+        or coverage >= SKU110K_SLOT_COVERAGE_THRESHOLD
+        or overlap >= SKU110K_SLOT_IOU_THRESHOLD
+    )
+
+
+def evaluate_slots_with_sku110k_planogram(
+    aligned_img: np.ndarray,
+    slots: List[Dict],
+    detections: List[Dict],
+) -> Tuple[List[Dict], List[Dict]]:
+    missing_items = []
+    slot_results = []
+
+    for slot in slots:
+        slot_id = slot.get("slot_id")
+        expected_count, min_count, required_count = slot_count_requirements(slot)
+
+        try:
+            slot_box = slot_box_xyxy(aligned_img, slot)
+        except (KeyError, TypeError, ValueError):
+            print(
+                f"[SKU110K_PLANOGRAM] slot={slot_id} "
+                f"count=0/{required_count} status=MISSING reason=invalid slot"
+            )
+            missing_items.append(
+                {
+                    "slot_id": slot_id,
+                    "product_name": slot_name(slot),
+                    "score": 0.0,
+                    "status": "MISSING",
+                    "expected_count": expected_count,
+                    "detected_count": 0,
+                    "required_count": required_count,
+                    "reason": "invalid slot coordinates",
+                }
+            )
+            slot_results.append(
+                {
+                    "slot": slot,
+                    "slot_id": slot_id,
+                    "product_name": slot_name(slot),
+                    "score": 0.0,
+                    "status": "MISSING",
+                    "label": "MISSING",
+                    "expected_count": expected_count,
+                    "min_count": min_count,
+                    "required_count": required_count,
+                    "detected_count": 0,
+                    "reason": "invalid slot coordinates",
+                }
+            )
+            continue
+
+        matches = [
+            detection
+            for detection in detections
+            if sku110k_detection_matches_slot(slot_box, detection)
+        ]
+        matched_count = len(matches)
+        passed = matched_count >= required_count
+        status = "PASS" if passed else "MISSING"
+        score = max((detection_confidence(item) for item in matches), default=0.0)
+        print(
+            f"[SKU110K_PLANOGRAM] slot={slot_id} "
+            f"count={matched_count}/{required_count} status={status}"
+        )
+
+        if not passed:
+            missing_items.append(
+                {
+                    "slot_id": slot_id,
+                    "product_name": slot_name(slot),
+                    "score": 0.0,
+                    "status": "MISSING",
+                    "expected_count": expected_count,
+                    "detected_count": matched_count,
+                    "required_count": required_count,
+                    "reason": "insufficient SKU110K product detections",
+                }
+            )
+
+        slot_results.append(
+            {
+                "slot": slot,
+                "slot_id": slot_id,
+                "product_name": slot_name(slot),
+                "score": round(float(score), 4),
+                "status": status,
+                "label": status,
+                "expected_count": expected_count,
+                "min_count": min_count,
+                "required_count": required_count,
+                "detected_count": matched_count,
+                "reason": None if passed else "insufficient SKU110K product detections",
+            }
+        )
+
+    return missing_items, slot_results
+
+
+def sku110k_planogram_summary(
+    product_slots: List[Dict],
+    promo_slots: List[Dict],
+    slot_results: List[Dict],
+) -> Dict:
+    product_total = len(product_slots)
+    product_missing_count = sum(
+        1 for item in slot_results if item.get("status") != "PASS"
+    )
+    product_pass_rate = pass_rate(product_total, product_missing_count)
+    promo_total = len(promo_slots)
+
+    return {
+        "product_total": product_total,
+        "product_missing_count": product_missing_count,
+        "product_pass_rate": product_pass_rate,
+        "promo_total": promo_total,
+        "promo_missing_count": 0,
+        "promo_pass_rate": 1.0,
+        "overall_compliance_score": product_pass_rate,
+    }
+
+
+def draw_sku110k_planogram_label(
+    image: np.ndarray,
+    text: str,
+    x: int,
+    y: int,
+    color: Tuple[int, int, int],
+) -> None:
+    text = truncate_label(text)
+    if not text:
+        return
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.36
+    thickness = 1
+    padding = 3
+    image_h, image_w = image.shape[:2]
+    (text_w, text_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+    label_w = min(text_w + padding * 2, image_w)
+    label_h = text_h + baseline + padding * 2
+    label_left = max(0, min(x, image_w - label_w))
+    label_top = y - label_h if y >= label_h else y
+    label_top = max(0, min(label_top, image_h - label_h))
+
+    cv2.rectangle(
+        image,
+        (label_left, label_top),
+        (label_left + label_w, label_top + label_h),
+        color,
+        -1,
+    )
+    cv2.putText(
+        image,
+        text,
+        (label_left + padding, label_top + text_h + padding),
+        font,
+        font_scale,
+        (255, 255, 255),
+        thickness,
+        cv2.LINE_AA,
+    )
+
+
+def draw_sku110k_planogram_annotation(
+    image: np.ndarray,
+    detections: List[Dict],
+    slot_results: List[Dict],
+) -> np.ndarray:
+    annotated = image.copy()
+
+    for detection in detections:
+        try:
+            x1, y1, x2, y2 = detection_box(detection)
+        except (KeyError, TypeError, ValueError):
+            continue
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (180, 130, 60), 1)
+
+    for result in slot_results:
+        slot = result.get("slot", {})
+        try:
+            x1, y1, x2, y2 = slot_box_xyxy(annotated, slot)
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        color = BOX_COLORS["PASS"] if result.get("status") == "PASS" else BOX_COLORS["MISSING"]
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 4)
+        detected_count = int(result.get("detected_count", 0) or 0)
+        required_count = int(result.get("required_count", 1) or 1)
+        slot_id = result.get("slot_id") or slot.get("slot_id") or ""
+        if result.get("status") == "PASS":
+            label = f"{slot_id} {detected_count}/{required_count}"
+        else:
+            label = f"{slot_id} MISS {detected_count}/{required_count}"
+        draw_sku110k_planogram_label(annotated, label, x1, y1, color)
+
+    return annotated
 
 
 def evaluate_slots_with_yolo_detections(
@@ -1871,6 +2176,92 @@ def analyze_hybrid(
         **summary,
     }
 
+
+def analyze_sku110k_planogram(
+    uploaded_img: np.ndarray,
+    model_result: Dict,
+    detected_model: str,
+    model_score: float,
+) -> Dict:
+    print("[SKU110K_PLANOGRAM] Running SKU110K planogram shelf audit")
+
+    aligned_img = model_result.get("aligned_image")
+    if detected_model not in HYBRID_MODEL_IDS or aligned_img is None:
+        print("[SKU110K_PLANOGRAM] Alignment failed")
+        print("[SKU110K_PLANOGRAM] final result=NEED_RETAKE")
+        return alignment_failure_response(
+            uploaded_img,
+            model_score,
+            "sku110k_planogram",
+        )
+
+    print(f"[SKU110K_PLANOGRAM] Detected model: {detected_model}")
+    planogram = load_planogram(detected_model)
+    slots = planogram.get("slots", []) or []
+    product_slots = [slot for slot in slots if expected_slot_type(slot) == "product"]
+    promo_slots = [slot for slot in slots if expected_slot_type(slot) == "promo"]
+    aligned_debug_image_name = save_aligned_debug_image(aligned_img, detected_model)
+
+    if not product_slots:
+        print("[SKU110K_PLANOGRAM] slot pass/missing summary passed=0 missing=0 total=0")
+        print("[SKU110K_PLANOGRAM] final result=PASS")
+        annotated = draw_banner(
+            aligned_img,
+            "NO PRODUCT SLOTS CONFIGURED",
+            BOX_COLORS["WARNING"],
+        )
+        annotated_image_name = save_annotated_image(annotated)
+        summary = sku110k_planogram_summary(product_slots, promo_slots, [])
+        return {
+            "detected_model": detected_model,
+            "model_score": model_score,
+            "result": "PASS",
+            "missing_count": 0,
+            "missing_items": [],
+            "annotated_image_name": annotated_image_name,
+            "aligned_debug_image_name": aligned_debug_image_name,
+            "analysis_mode": "sku110k_planogram",
+            **summary,
+        }
+
+    detections = detect_sku110k_planogram_products(
+        aligned_img,
+        confidence_threshold=SKU110K_PLANOGRAM_CONFIDENCE_THRESHOLD,
+    )
+    missing_items, slot_results = evaluate_slots_with_sku110k_planogram(
+        aligned_img,
+        product_slots,
+        detections,
+    )
+    summary = sku110k_planogram_summary(product_slots, promo_slots, slot_results)
+    result = "FAIL" if summary["product_missing_count"] > 0 else "PASS"
+    print(
+        "[SKU110K_PLANOGRAM] slot pass/missing summary "
+        f"passed={summary['product_total'] - summary['product_missing_count']} "
+        f"missing={summary['product_missing_count']} total={summary['product_total']}"
+    )
+    print(f"[SKU110K_PLANOGRAM] final result={result}")
+
+    annotated = draw_sku110k_planogram_annotation(
+        aligned_img,
+        detections,
+        slot_results,
+    )
+    annotated_image_name = save_annotated_image(annotated)
+
+    return {
+        "detected_model": detected_model,
+        "model_score": model_score,
+        "result": result,
+        "missing_count": len(missing_items),
+        "missing_items": missing_items,
+        "annotated_image_name": annotated_image_name,
+        "aligned_debug_image_name": aligned_debug_image_name,
+        "analysis_mode": "sku110k_planogram",
+        **summary,
+    }
+
+
 def check_missing_items(uploaded_img: np.ndarray, model_id: str) -> List[Dict]:
     planogram = load_planogram(model_id)
     slots = planogram.get("slots", []) or []
@@ -1979,10 +2370,18 @@ def analyze_image(image_path: str) -> Dict:
         raise ValueError(f"Could not read image: {image_path}")
 
     mode = selected_analysis_mode()
-    model_ids = HYBRID_MODEL_IDS if mode == "hybrid" else None
+    model_ids = HYBRID_MODEL_IDS if mode in {"hybrid", "sku110k_planogram"} else None
     model_result = detect_shelf_model(uploaded_img, model_ids=model_ids)
     detected_model = model_result["detected_model"]
     model_score = float(model_result["model_score"])
+
+    if mode == "sku110k_planogram":
+        return analyze_sku110k_planogram(
+            uploaded_img,
+            model_result,
+            detected_model,
+            model_score,
+        )
 
     if mode == "hybrid":
         hybrid_response = analyze_hybrid(
