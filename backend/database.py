@@ -1,49 +1,205 @@
-﻿import json
+from __future__ import annotations
+
+import json
 import os
 import sqlite3
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from urllib.parse import unquote
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(BASE_DIR)
 DB_PATH = os.path.join(BASE_DIR, "shelf_audit.db")
+DEFAULT_DATABASE_URL = "sqlite:///backend/shelf_audit.db"
+
+POSTGRES_PREFIXES = (
+    "postgresql://",
+    "postgresql+psycopg2://",
+    "postgres://",
+)
 
 
 def utc_now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")
-    return conn
+def get_database_url() -> str:
+    return (os.getenv("DATABASE_URL") or DEFAULT_DATABASE_URL).strip()
 
 
-def _table_columns(conn: sqlite3.Connection) -> Dict[str, sqlite3.Row]:
+def get_database_backend(database_url: Optional[str] = None) -> str:
+    url = (database_url or get_database_url()).lower()
+    if url.startswith("sqlite:"):
+        return "sqlite"
+    if url.startswith(POSTGRES_PREFIXES):
+        return "postgres"
+    raise ValueError(
+        "Unsupported DATABASE_URL. Use sqlite:///... or "
+        "postgresql+psycopg2://user:password@host:5432/dbname."
+    )
+
+
+def _normalize_postgres_url(database_url: str) -> str:
+    if database_url.startswith("postgresql+psycopg2://"):
+        return "postgresql://" + database_url[len("postgresql+psycopg2://") :]
+    return database_url
+
+
+def _sqlite_path_from_url(database_url: str) -> str:
+    if database_url == DEFAULT_DATABASE_URL:
+        return DB_PATH
+
+    if database_url == "sqlite:///:memory:":
+        return ":memory:"
+
+    if not database_url.startswith("sqlite:///"):
+        raise ValueError("SQLite DATABASE_URL must use sqlite:///path/to/file.db")
+
+    raw_path = unquote(database_url[len("sqlite:///") :])
+    if raw_path.startswith("/") and len(raw_path) > 2 and raw_path[2] == ":":
+        raw_path = raw_path[1:]
+
+    if not os.path.isabs(raw_path):
+        raw_path = os.path.join(REPO_ROOT, raw_path)
+
+    return os.path.abspath(raw_path)
+
+
+def _postgres_query(sql: str) -> str:
+    return sql.replace("?", "%s")
+
+
+class QueryResult:
+    def __init__(self, cursor: Any, backend: str):
+        self._cursor = cursor
+        self._backend = backend
+
+    @property
+    def lastrowid(self) -> Optional[int]:
+        if self._backend == "sqlite":
+            return self._cursor.lastrowid
+        return None
+
+    def fetchone(self) -> Any:
+        return self._cursor.fetchone()
+
+    def fetchall(self) -> List[Any]:
+        return self._cursor.fetchall()
+
+
+class DatabaseConnection:
+    def __init__(self, raw_connection: Any, backend: str):
+        self._raw_connection = raw_connection
+        self.backend = backend
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> QueryResult:
+        if self.backend == "postgres":
+            cursor = self._raw_connection.cursor()
+            cursor.execute(_postgres_query(sql), params)
+            return QueryResult(cursor, self.backend)
+
+        cursor = self._raw_connection.execute(sql, params)
+        return QueryResult(cursor, self.backend)
+
+    def commit(self) -> None:
+        self._raw_connection.commit()
+
+    def rollback(self) -> None:
+        self._raw_connection.rollback()
+
+    def close(self) -> None:
+        self._raw_connection.close()
+
+    def __enter__(self) -> "DatabaseConnection":
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        if exc_type is None:
+            self.commit()
+        else:
+            self.rollback()
+        self.close()
+
+
+def get_connection() -> DatabaseConnection:
+    database_url = get_database_url()
+    backend = get_database_backend(database_url)
+
+    if backend == "sqlite":
+        sqlite_path = _sqlite_path_from_url(database_url)
+        if sqlite_path != ":memory:":
+            os.makedirs(os.path.dirname(sqlite_path), exist_ok=True)
+
+        conn = sqlite3.connect(sqlite_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        return DatabaseConnection(conn, backend)
+
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+    except ImportError as exc:
+        raise RuntimeError(
+            "PostgreSQL DATABASE_URL requires psycopg2-binary. "
+            "Run: backend\\.venv\\Scripts\\pip.exe install -r backend\\requirements.txt"
+        ) from exc
+
+    conn = psycopg2.connect(
+        _normalize_postgres_url(database_url),
+        cursor_factory=RealDictCursor,
+    )
+    return DatabaseConnection(conn, backend)
+
+
+def _table_columns(conn: DatabaseConnection) -> Dict[str, Any]:
+    if conn.backend == "postgres":
+        rows = conn.execute(
+            """
+            SELECT column_name AS name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'inspections'
+            """
+        ).fetchall()
+        return {row["name"]: row for row in rows}
+
     rows = conn.execute("PRAGMA table_info(inspections)").fetchall()
     return {row["name"]: row for row in rows}
 
 
 def _add_column_if_missing(
-    conn: sqlite3.Connection,
-    columns: Dict[str, sqlite3.Row],
+    conn: DatabaseConnection,
+    columns: Dict[str, Any],
     name: str,
     definition: str,
 ) -> None:
     if name not in columns:
         conn.execute(f"ALTER TABLE inspections ADD COLUMN {name} {definition}")
-        columns[name] = conn.execute(
-            "PRAGMA table_info(inspections)"
-        ).fetchall()[-1]
+        columns[name] = {"name": name}
 
 
-def init_db() -> None:
-    os.makedirs(BASE_DIR, exist_ok=True)
-
-    with get_connection() as conn:
-        conn.execute(
+def _create_inspections_table_sql(backend: str) -> str:
+    if backend == "postgres":
+        return """
+            CREATE TABLE IF NOT EXISTS inspections (
+                id SERIAL PRIMARY KEY,
+                branch_code TEXT NOT NULL,
+                image_name TEXT NOT NULL,
+                detected_model TEXT,
+                model_score REAL,
+                result TEXT,
+                missing_count INTEGER DEFAULT 0,
+                missing_items_json TEXT DEFAULT '[]',
+                status TEXT DEFAULT 'PENDING',
+                error_message TEXT,
+                annotated_image_name TEXT,
+                created_at TEXT DEFAULT (CURRENT_TIMESTAMP::text),
+                updated_at TEXT DEFAULT (CURRENT_TIMESTAMP::text)
+            )
             """
+
+    return """
             CREATE TABLE IF NOT EXISTS inspections (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 branch_code TEXT NOT NULL,
@@ -60,7 +216,13 @@ def init_db() -> None:
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
             """
-        )
+
+
+def init_db() -> None:
+    os.makedirs(BASE_DIR, exist_ok=True)
+
+    with get_connection() as conn:
+        conn.execute(_create_inspections_table_sql(conn.backend))
 
         columns = _table_columns(conn)
         _add_column_if_missing(conn, columns, "branch_code", "TEXT NOT NULL DEFAULT ''")
@@ -83,12 +245,14 @@ def init_db() -> None:
 
         now = utc_now_text()
         conn.execute("UPDATE inspections SET status = COALESCE(status, 'PENDING')")
-        conn.execute("""
+        conn.execute(
+            """
             UPDATE inspections
             SET status = 'DONE'
             WHERE result IN ('PASS', 'FAIL', 'UNKNOWN_MODEL')
               AND (status IS NULL OR status = '' OR status = 'PENDING')
-        """)
+            """
+        )
         conn.execute("UPDATE inspections SET missing_count = COALESCE(missing_count, 0)")
         conn.execute(
             "UPDATE inspections SET missing_items_json = COALESCE(missing_items_json, '[]')"
@@ -101,8 +265,7 @@ def create_inspection(branch_code: str, image_name: str) -> int:
     now = utc_now_text()
 
     with get_connection() as conn:
-        cursor = conn.execute(
-            """
+        insert_sql = """
             INSERT INTO inspections (
                 branch_code,
                 image_name,
@@ -117,7 +280,12 @@ def create_inspection(branch_code: str, image_name: str) -> int:
                 updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+            """
+        if conn.backend == "postgres":
+            insert_sql += " RETURNING id"
+
+        cursor = conn.execute(
+            insert_sql,
             (
                 branch_code,
                 image_name,
@@ -132,8 +300,15 @@ def create_inspection(branch_code: str, image_name: str) -> int:
                 now,
             ),
         )
+
+        if conn.backend == "postgres":
+            row = cursor.fetchone()
+            inspection_id = int(row["id"])
+        else:
+            inspection_id = int(cursor.lastrowid or 0)
+
         conn.commit()
-        return int(cursor.lastrowid)
+        return inspection_id
 
 
 def update_inspection_status(
@@ -192,7 +367,7 @@ def update_inspection_result(
         conn.commit()
 
 
-def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+def _row_to_dict(row: Any) -> Dict[str, Any]:
     item = dict(row)
     raw_missing = item.get("missing_items_json") or "[]"
 

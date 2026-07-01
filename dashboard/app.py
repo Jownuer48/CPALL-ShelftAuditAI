@@ -1,6 +1,6 @@
 ﻿import json
 import os
-import sqlite3
+import sys
 
 import pandas as pd
 import streamlit as st
@@ -8,9 +8,13 @@ from PIL import Image
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND_DIR = os.path.join(BASE_DIR, "backend")
-DB_PATH = os.path.join(BACKEND_DIR, "shelf_audit.db")
 UPLOAD_DIR = os.path.join(BACKEND_DIR, "uploads")
 ANNOTATED_DIR = os.path.join(BACKEND_DIR, "annotated")
+
+if BACKEND_DIR not in sys.path:
+    sys.path.insert(0, BACKEND_DIR)
+
+from database import get_connection, init_db
 
 REQUIRED_COLUMNS = {
     "id": None,
@@ -46,21 +50,15 @@ st.caption("Dashboard สำหรับตรวจสอบภาพเชล�
 
 
 def load_data() -> pd.DataFrame:
-    if not os.path.exists(DB_PATH):
-        return pd.DataFrame()
-
     try:
-        conn = sqlite3.connect(DB_PATH)
-        table_exists = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='inspections'"
-        ).fetchone()
+        init_db()
+        with get_connection() as conn:
+            rows = conn.execute("SELECT * FROM inspections ORDER BY id DESC").fetchall()
 
-        if not table_exists:
-            conn.close()
+        if not rows:
             return pd.DataFrame()
 
-        df = pd.read_sql_query("SELECT * FROM inspections ORDER BY id DESC", conn)
-        conn.close()
+        df = pd.DataFrame([dict(row) for row in rows])
 
         for column, default in REQUIRED_COLUMNS.items():
             if column not in df.columns:

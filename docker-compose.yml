@@ -1,6 +1,19 @@
 version: '3.8'
 
 services:
+  postgres:
+    image: postgres:16
+    container_name: shelf-postgres
+    environment:
+      POSTGRES_DB: shelf_audit
+      POSTGRES_USER: shelf_user
+      POSTGRES_PASSWORD: shelf_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - shelf_postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
   rabbitmq:
     image: rabbitmq:3-management
     container_name: shelf-rabbitmq
@@ -12,4 +25,5 @@ services:
       - shelf_rabbitmq_data:/var/lib/rabbitmq
 
 volumes:
+  shelf_postgres_data:
   shelf_rabbitmq_data:
