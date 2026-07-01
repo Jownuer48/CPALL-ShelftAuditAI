@@ -1,9 +1,13 @@
 ﻿fastapi
 uvicorn
+streamlit
 python-multipart
 pika
 opencv-python
 scikit-image
 numpy
+pandas
 pillow
 ultralytics
+psycopg2-binary
+sqlalchemy
