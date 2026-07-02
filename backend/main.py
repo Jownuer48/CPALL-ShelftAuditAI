@@ -1,7 +1,8 @@
 ﻿import os
 import shutil
 import uuid
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +12,8 @@ from ai_analyzer import reference_status_items
 from database import (
     create_inspection,
     get_all_inspections,
+    get_connection as get_db_connection,
+    get_database_backend,
     get_inspection,
     get_pending_inspections,
     init_db,
@@ -18,16 +21,27 @@ from database import (
     reset_inspection_for_retry,
     update_inspection_status,
 )
-from queue_client import SHELF_QUEUE_NAME, publish_job
+from queue_client import (
+    RABBITMQ_HOST,
+    RABBITMQ_PORT,
+    SHELF_QUEUE_NAME,
+    get_connection as get_rabbitmq_connection,
+    publish_job,
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 ANNOTATED_DIR = os.path.join(BASE_DIR, "annotated")
 REFERENCE_DIR = os.path.join(BASE_DIR, "reference")
 PLANOGRAM_DIR = os.path.join(BASE_DIR, "planograms")
+YOLO_MODELS_DIR = os.path.join(BASE_DIR, "yolo_models")
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 ADMIN_MARK_FAILED_MESSAGE = "Marked failed by admin action because job was stuck or could not complete."
+REQUIRED_MODEL_FILES = [
+    ("sku110k_product", os.path.join(YOLO_MODELS_DIR, "experiments", "sku110k_product.pt")),
+    ("shelf_yolo", os.path.join(YOLO_MODELS_DIR, "shelf_yolo.pt")),
+]
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(ANNOTATED_DIR, exist_ok=True)
@@ -69,6 +83,138 @@ def root():
         "docs": "/docs",
         "queue": SHELF_QUEUE_NAME,
         "results": "/results",
+    }
+
+
+def utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def health_db_status() -> Dict[str, Any]:
+    try:
+        mode = get_database_backend()
+        with get_db_connection() as conn:
+            row = conn.execute("SELECT 1 AS ok").fetchone()
+
+        if row is None:
+            return {
+                "status": "error",
+                "mode": mode,
+                "message": "Database query returned no rows.",
+            }
+
+        return {
+            "status": "ok",
+            "mode": mode,
+            "message": "Database connectivity ok.",
+        }
+    except Exception as exc:
+        try:
+            mode = get_database_backend()
+        except Exception:
+            mode = "unknown"
+        return {
+            "status": "error",
+            "mode": mode,
+            "message": str(exc),
+        }
+
+
+def health_rabbitmq_status() -> Dict[str, Any]:
+    connection = None
+    try:
+        connection = get_rabbitmq_connection()
+        channel = connection.channel()
+        channel.queue_declare(queue=SHELF_QUEUE_NAME, durable=True)
+        channel.close()
+        return {
+            "status": "ok",
+            "host": RABBITMQ_HOST,
+            "port": RABBITMQ_PORT,
+            "queue": SHELF_QUEUE_NAME,
+            "message": "RabbitMQ connectivity ok.",
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "host": RABBITMQ_HOST,
+            "port": RABBITMQ_PORT,
+            "queue": SHELF_QUEUE_NAME,
+            "message": str(exc),
+        }
+    finally:
+        if connection and connection.is_open:
+            connection.close()
+
+
+def health_models_status() -> Dict[str, Any]:
+    models = []
+    missing = []
+
+    for name, path in REQUIRED_MODEL_FILES:
+        exists = os.path.exists(path)
+        size_bytes = os.path.getsize(path) if exists else 0
+        ok = exists and size_bytes > 0
+        relative_path = os.path.relpath(path, os.path.dirname(BASE_DIR))
+        model = {
+            "name": name,
+            "path": relative_path.replace("\\", "/"),
+            "exists": exists,
+            "size_bytes": size_bytes,
+            "status": "ok" if ok else "error",
+        }
+        models.append(model)
+        if not ok:
+            missing.append(model["path"])
+
+    return {
+        "status": "ok" if not missing else "error",
+        "models": models,
+        "missing": missing,
+        "message": (
+            "All required model files are present."
+            if not missing
+            else "Required model files are missing or empty."
+        ),
+    }
+
+
+def overall_health_status(*components: Dict[str, Any]) -> str:
+    statuses = [str(component.get("status", "error")) for component in components]
+    if any(status == "error" for status in statuses):
+        return "error"
+    if any(status == "degraded" for status in statuses):
+        return "degraded"
+    return "ok"
+
+
+@app.get("/health/db")
+def health_db():
+    return health_db_status()
+
+
+@app.get("/health/rabbitmq")
+def health_rabbitmq():
+    return health_rabbitmq_status()
+
+
+@app.get("/health/models")
+def health_models():
+    return health_models_status()
+
+
+@app.get("/health")
+def health():
+    database = health_db_status()
+    rabbitmq = health_rabbitmq_status()
+    models = health_models_status()
+    return {
+        "status": overall_health_status(database, rabbitmq, models),
+        "timestamp": utc_timestamp(),
+        "analysis_mode": os.getenv("SHELF_AUDIT_ANALYSIS_MODE", "hybrid"),
+        "database": database,
+        "rabbitmq": rabbitmq,
+        "models": models,
     }
 
 
