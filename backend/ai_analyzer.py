@@ -230,6 +230,16 @@ def find_reference_file(model_key: str) -> Optional[str]:
     return None
 
 
+def log_reference_load_failure(model_id: str, path: str, imread_success: bool) -> None:
+    print(
+        "[REFERENCE] load failed",
+        "model_id=", model_id,
+        "selected_reference_path=", path,
+        "exists=", os.path.exists(path),
+        "cv2_imread_success=", imread_success,
+    )
+
+
 def reference_status_items() -> List[Dict]:
     items = []
 
@@ -255,11 +265,16 @@ def load_reference_images(model_ids: Optional[List[str]] = None) -> Dict[str, np
     for model_id in active_models:
         path = find_reference_file(model_id)
         if not path:
+            base_name = REFERENCE_MODELS[model_id]
+            expected_path = os.path.join(REFERENCE_DIR, f"{base_name}{REFERENCE_EXTENSIONS[0]}")
+            log_reference_load_failure(model_id, expected_path, False)
             continue
 
         img = read_image(path)
         if img is not None:
             refs[model_id] = img
+        else:
+            log_reference_load_failure(model_id, path, False)
 
     return refs
 
@@ -2212,6 +2227,14 @@ def analyze_sku110k_planogram(
         )
         annotated_image_name = save_annotated_image(annotated)
         summary = sku110k_planogram_summary(product_slots, promo_slots, [])
+        print(
+            "[SKU110K_PLANOGRAM] metrics "
+            f"analysis_mode=sku110k_planogram "
+            f"product_total={summary['product_total']} "
+            f"product_missing_count={summary['product_missing_count']} "
+            f"product_pass_rate={summary['product_pass_rate']} "
+            "final_result=PASS"
+        )
         return {
             "detected_model": detected_model,
             "model_score": model_score,
@@ -2239,6 +2262,14 @@ def analyze_sku110k_planogram(
         "[SKU110K_PLANOGRAM] slot pass/missing summary "
         f"passed={summary['product_total'] - summary['product_missing_count']} "
         f"missing={summary['product_missing_count']} total={summary['product_total']}"
+    )
+    print(
+        "[SKU110K_PLANOGRAM] metrics "
+        f"analysis_mode=sku110k_planogram "
+        f"product_total={summary['product_total']} "
+        f"product_missing_count={summary['product_missing_count']} "
+        f"product_pass_rate={summary['product_pass_rate']} "
+        f"final_result={result}"
     )
     print(f"[SKU110K_PLANOGRAM] final result={result}")
 

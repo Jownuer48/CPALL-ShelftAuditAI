@@ -18,7 +18,7 @@ BACKEND_DIR = REPO_ROOT / "backend"
 REFERENCE_DIR = BACKEND_DIR / "reference"
 DEBUG_DIR = BACKEND_DIR / "debug" / "sku110k"
 PLANOGRAM_PATH = BACKEND_DIR / "planograms" / "model_a.json"
-REFERENCE_CANDIDATES = ("model_a.JPG", "model_a.jpg")
+REFERENCE_CANDIDATES = ("model_a.jpg",)
 DEFAULT_CURRENT_OUTPUT = DEBUG_DIR / "current_detector_result.jpg"
 DEFAULT_SKU110K_OUTPUT = DEBUG_DIR / "sku110k_detector_result.jpg"
 
@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
         "--image",
         type=Path,
         default=None,
-        help="Optional shelf image path. Defaults to backend/reference/model_a.JPG or model_a.jpg.",
+        help="Optional shelf image path. Defaults to backend/reference/model_a.jpg.",
     )
     parser.add_argument("--confidence", type=float, default=0.10)
     parser.add_argument("--planogram", type=Path, default=PLANOGRAM_PATH)

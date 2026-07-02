@@ -16,7 +16,7 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_DIR = REPO_ROOT / "backend"
-IMAGE_PATH = BACKEND_DIR / "reference" / "model_a.JPG"
+IMAGE_PATH = BACKEND_DIR / "reference" / "model_a.jpg"
 PLANOGRAM_PATH = BACKEND_DIR / "planograms" / "model_a.json"
 MODEL_PATH = BACKEND_DIR / "yolo_models" / "experiments" / "sku110k_product.pt"
 DEBUG_DIR = BACKEND_DIR / "debug" / "sku110k"

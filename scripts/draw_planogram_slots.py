@@ -7,7 +7,6 @@ MODEL = "a"
 json_path = f"backend/planograms/model_{MODEL}.json"
 
 possible_images = [
-    f"backend/reference/model_{MODEL}.JPG",
     f"backend/reference/model_{MODEL}.jpg",
     f"backend/reference/model_{MODEL}.png",
     f"backend/reference/model_{MODEL}.jpeg",

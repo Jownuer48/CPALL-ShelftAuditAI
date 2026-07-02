@@ -194,6 +194,14 @@ def _create_inspections_table_sql(backend: str) -> str:
                 status TEXT DEFAULT 'PENDING',
                 error_message TEXT,
                 annotated_image_name TEXT,
+                analysis_mode TEXT,
+                product_total INTEGER DEFAULT 0,
+                product_missing_count INTEGER DEFAULT 0,
+                product_pass_rate REAL DEFAULT 0,
+                promo_total INTEGER DEFAULT 0,
+                promo_missing_count INTEGER DEFAULT 0,
+                promo_pass_rate REAL DEFAULT 0,
+                overall_compliance_score REAL DEFAULT 0,
                 created_at TEXT DEFAULT (CURRENT_TIMESTAMP::text),
                 updated_at TEXT DEFAULT (CURRENT_TIMESTAMP::text)
             )
@@ -212,6 +220,14 @@ def _create_inspections_table_sql(backend: str) -> str:
                 status TEXT DEFAULT 'PENDING',
                 error_message TEXT,
                 annotated_image_name TEXT,
+                analysis_mode TEXT,
+                product_total INTEGER DEFAULT 0,
+                product_missing_count INTEGER DEFAULT 0,
+                product_pass_rate REAL DEFAULT 0,
+                promo_total INTEGER DEFAULT 0,
+                promo_missing_count INTEGER DEFAULT 0,
+                promo_pass_rate REAL DEFAULT 0,
+                overall_compliance_score REAL DEFAULT 0,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
@@ -240,6 +256,14 @@ def init_db() -> None:
         _add_column_if_missing(conn, columns, "status", "TEXT DEFAULT 'PENDING'")
         _add_column_if_missing(conn, columns, "error_message", "TEXT")
         _add_column_if_missing(conn, columns, "annotated_image_name", "TEXT")
+        _add_column_if_missing(conn, columns, "analysis_mode", "TEXT")
+        _add_column_if_missing(conn, columns, "product_total", "INTEGER DEFAULT 0")
+        _add_column_if_missing(conn, columns, "product_missing_count", "INTEGER DEFAULT 0")
+        _add_column_if_missing(conn, columns, "product_pass_rate", "REAL DEFAULT 0")
+        _add_column_if_missing(conn, columns, "promo_total", "INTEGER DEFAULT 0")
+        _add_column_if_missing(conn, columns, "promo_missing_count", "INTEGER DEFAULT 0")
+        _add_column_if_missing(conn, columns, "promo_pass_rate", "REAL DEFAULT 0")
+        _add_column_if_missing(conn, columns, "overall_compliance_score", "REAL DEFAULT 0")
         _add_column_if_missing(conn, columns, "created_at", "TEXT")
         _add_column_if_missing(conn, columns, "updated_at", "TEXT")
 
@@ -383,6 +407,14 @@ def update_inspection_result(
     missing_count: int,
     missing_items: List[Dict[str, Any]],
     annotated_image_name: Optional[str] = None,
+    analysis_mode: Optional[str] = None,
+    product_total: Optional[int] = None,
+    product_missing_count: Optional[int] = None,
+    product_pass_rate: Optional[float] = None,
+    promo_total: Optional[int] = None,
+    promo_missing_count: Optional[int] = None,
+    promo_pass_rate: Optional[float] = None,
+    overall_compliance_score: Optional[float] = None,
 ) -> None:
     with get_connection() as conn:
         conn.execute(
@@ -397,6 +429,14 @@ def update_inspection_result(
                 status = 'DONE',
                 error_message = NULL,
                 annotated_image_name = ?,
+                analysis_mode = ?,
+                product_total = ?,
+                product_missing_count = ?,
+                product_pass_rate = ?,
+                promo_total = ?,
+                promo_missing_count = ?,
+                promo_pass_rate = ?,
+                overall_compliance_score = ?,
                 updated_at = ?
             WHERE id = ?
             """,
@@ -407,11 +447,28 @@ def update_inspection_result(
                 missing_count,
                 json.dumps(missing_items, ensure_ascii=False),
                 annotated_image_name,
+                analysis_mode,
+                product_total,
+                product_missing_count,
+                product_pass_rate,
+                promo_total,
+                promo_missing_count,
+                promo_pass_rate,
+                overall_compliance_score,
                 utc_now_text(),
                 inspection_id,
             ),
         )
         conn.commit()
+    print(
+        "[DATABASE] persisted inspection metrics",
+        "inspection_id=", inspection_id,
+        "analysis_mode=", analysis_mode,
+        "product_total=", product_total,
+        "product_missing_count=", product_missing_count,
+        "product_pass_rate=", product_pass_rate,
+        "result=", result,
+    )
 
 
 def _row_to_dict(row: Any) -> Dict[str, Any]:

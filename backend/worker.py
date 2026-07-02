@@ -11,6 +11,10 @@ from queue_client import SHELF_QUEUE_NAME, get_connection
 RECONNECT_DELAY_SECONDS = 5
 
 
+def result_value(result: dict, key: str):
+    return result[key] if key in result else None
+
+
 def process_job(message: dict) -> None:
     if message.get("type") == "health_check":
         print("[WORKER] Health check received")
@@ -27,6 +31,15 @@ def process_job(message: dict) -> None:
     update_inspection_status(int(inspection_id), "PROCESSING")
 
     result = analyze_image(str(image_path))
+    print(
+        "[WORKER] Analysis metrics",
+        f"inspection_id={inspection_id}",
+        f"analysis_mode={result.get('analysis_mode')}",
+        f"product_total={result.get('product_total')}",
+        f"product_missing_count={result.get('product_missing_count')}",
+        f"product_pass_rate={result.get('product_pass_rate')}",
+        f"final_result={result.get('result')}",
+    )
     update_inspection_result(
         inspection_id=int(inspection_id),
         detected_model=result.get("detected_model"),
@@ -35,6 +48,23 @@ def process_job(message: dict) -> None:
         missing_count=int(result.get("missing_count", 0)),
         missing_items=result.get("missing_items", []),
         annotated_image_name=result.get("annotated_image_name"),
+        analysis_mode=result_value(result, "analysis_mode"),
+        product_total=result_value(result, "product_total"),
+        product_missing_count=result_value(result, "product_missing_count"),
+        product_pass_rate=result_value(result, "product_pass_rate"),
+        promo_total=result_value(result, "promo_total"),
+        promo_missing_count=result_value(result, "promo_missing_count"),
+        promo_pass_rate=result_value(result, "promo_pass_rate"),
+        overall_compliance_score=result_value(result, "overall_compliance_score"),
+    )
+    print(
+        "[WORKER] Persisted metrics",
+        f"inspection_id={inspection_id}",
+        f"analysis_mode={result.get('analysis_mode')}",
+        f"product_total={result.get('product_total')}",
+        f"product_missing_count={result.get('product_missing_count')}",
+        f"product_pass_rate={result.get('product_pass_rate')}",
+        f"final_result={result.get('result')}",
     )
     print(f"[WORKER] DONE inspection_id={inspection_id}")
 
