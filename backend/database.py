@@ -328,6 +328,53 @@ def update_inspection_status(
         conn.commit()
 
 
+def mark_inspection_failed(
+    inspection_id: int,
+    error_message: str,
+) -> Optional[Dict[str, Any]]:
+    if get_inspection(inspection_id) is None:
+        return None
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE inspections
+            SET
+                status = 'FAILED',
+                result = 'FAIL',
+                error_message = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (error_message, utc_now_text(), inspection_id),
+        )
+        conn.commit()
+
+    return get_inspection(inspection_id)
+
+
+def reset_inspection_for_retry(inspection_id: int) -> Optional[Dict[str, Any]]:
+    if get_inspection(inspection_id) is None:
+        return None
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE inspections
+            SET
+                status = 'PENDING',
+                result = 'PENDING',
+                error_message = NULL,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (utc_now_text(), inspection_id),
+        )
+        conn.commit()
+
+    return get_inspection(inspection_id)
+
+
 def update_inspection_result(
     inspection_id: int,
     detected_model: Optional[str],
@@ -412,6 +459,24 @@ def get_all_inspections(limit: int = 100) -> List[Dict[str, Any]]:
         rows = conn.execute(
             "SELECT * FROM inspections ORDER BY id DESC LIMIT ?",
             (safe_limit,),
+        ).fetchall()
+
+    return [_row_to_dict(row) for row in rows]
+
+
+def get_pending_inspections(limit: int = 100) -> List[Dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 500))
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM inspections
+            WHERE status = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            ("PENDING", safe_limit),
         ).fetchall()
 
     return [_row_to_dict(row) for row in rows]
