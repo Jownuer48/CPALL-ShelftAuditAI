@@ -1,4 +1,19 @@
-version: '3.8'
+x-python-service: &python-service
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  environment: &python-env
+    DATABASE_URL: postgresql+psycopg2://shelf_user:shelf_password@postgres:5432/shelf_audit
+    RABBITMQ_HOST: rabbitmq
+    RABBITMQ_PORT: "5672"
+    SHELF_QUEUE_NAME: shelf_audit_queue
+    SHELF_AUDIT_ANALYSIS_MODE: sku110k_planogram
+    YOLO_CONFIG_DIR: /tmp/ultralytics
+    CUDA_VISIBLE_DEVICES: "-1"
+  volumes:
+    - shelf_uploads:/app/backend/uploads
+    - shelf_annotated:/app/backend/annotated
+  restart: unless-stopped
 
 services:
   postgres:
@@ -18,12 +33,45 @@ services:
     image: rabbitmq:3-management
     container_name: shelf-rabbitmq
     ports:
-      # ใช้พอร์ตมาตรฐานได้เลย เพราะโปรเจกต์เก่าใช้ 5673 ไปแล้ว จะไม่ชนกันแน่นอน
-      - "5672:5672"   
+      - "5672:5672"
       - "15672:15672"
     volumes:
       - shelf_rabbitmq_data:/var/lib/rabbitmq
+    restart: unless-stopped
+
+  backend:
+    <<: *python-service
+    container_name: shelf-backend
+    working_dir: /app/backend
+    command: python -m uvicorn main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - rabbitmq
+
+  worker:
+    <<: *python-service
+    container_name: shelf-worker
+    working_dir: /app/backend
+    command: python worker.py
+    depends_on:
+      - postgres
+      - rabbitmq
+
+  dashboard:
+    <<: *python-service
+    container_name: shelf-dashboard
+    working_dir: /app
+    command: python -m streamlit run dashboard/app.py --server.address=0.0.0.0 --server.port=8501
+    ports:
+      - "8501:8501"
+    depends_on:
+      - postgres
+      - backend
 
 volumes:
   shelf_postgres_data:
   shelf_rabbitmq_data:
+  shelf_uploads:
+  shelf_annotated:
